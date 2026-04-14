@@ -14,6 +14,9 @@ st.title("TechMPower RAG Assistant")
 st.caption("Document-grounded RAG system with background-aware personalization")
 
 
+# -----------------------------
+# Helpers
+# -----------------------------
 def load_resume_text(uploaded_file) -> str:
     suffix = os.path.splitext(uploaded_file.name)[1].lower()
 
@@ -30,7 +33,7 @@ def load_resume_text(uploaded_file) -> str:
             return ""
 
         text = " ".join(page_text for _, page_text in pages)
-        return text[:5000]
+        return text[:8000]
     finally:
         if os.path.exists(tmp_path):
             os.remove(tmp_path)
@@ -52,8 +55,12 @@ def display_citations(citations):
 def build_user_profile_from_background(retrieved_background: dict) -> dict:
     structured = (retrieved_background or {}).get("structured_profile") or {}
 
+    role = structured.get("role_lens", "general")
+    if role == "product_manager":
+        role = "pm"
+
     return {
-        "role": structured.get("role_lens", "general"),
+        "role": role,
         "technical_level": structured.get("technical_depth", "medium"),
         "goal": "understanding",
         "short_reason": structured.get("short_reason", "")
@@ -93,8 +100,11 @@ Profile hint: {short_reason}
 Instructions:
 - Answer clearly and accurately using general knowledge.
 - Adapt the explanation to the user's likely background.
-- If the user is less technical, simplify jargon.
-- If the user is more technical, include more mechanism/detail.
+- If role is business, emphasize practical meaning, workflow, value, and analogy.
+- If role is pm, emphasize workflow, dependencies, deliverables, and high-level understanding.
+- If role is engineer, include more architecture, modules, tradeoffs, and mechanism.
+- If technical level is low, simplify jargon and define terms.
+- If technical level is high, include more detail.
 - Do not say "the evidence is insufficient."
 - Do not say "human review required."
 - Do not mention missing project documents.
@@ -127,6 +137,9 @@ Question:
     }
 
 
+# -----------------------------
+# Init RAG
+# -----------------------------
 if "rag" not in st.session_state:
     with st.spinner("Loading RAG system..."):
         st.session_state.rag = initialize_rag(
@@ -239,7 +252,7 @@ if st.button("Run"):
                     st.json(routing_decision)
 
             # -----------------------------
-            # Step 4: Non-clarification routes
+            # Step 4: Retrieval + generation routes
             # -----------------------------
             else:
                 if "background_request" in routing_decision:
@@ -254,11 +267,19 @@ if st.button("Run"):
                     if retrieved_background.get("structured_profile") is not None:
                         inferred_profile = build_user_profile_from_background(retrieved_background)
 
-                # Resolve final role
-                if inferred_profile and not allow_manual_override:
-                    effective_role = inferred_profile["role"]
-                elif inferred_profile and allow_manual_override:
-                    effective_role = manual_role
+                # -----------------------------
+                # FIX FOR PROBLEM 2:
+                # inferred profile should actually drive role selection
+                # -----------------------------
+                if inferred_profile:
+                    if allow_manual_override:
+                        # Only override if the user explicitly chose a non-general role
+                        if manual_role != "general":
+                            effective_role = manual_role
+                        else:
+                            effective_role = inferred_profile["role"]
+                    else:
+                        effective_role = inferred_profile["role"]
                 else:
                     effective_role = manual_role
 
