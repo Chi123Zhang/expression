@@ -34,11 +34,7 @@ def _parse_json_safely(text: str) -> Dict:
 
 
 def _is_potentially_ambiguous_query(raw_query: str) -> Dict:
-    """
-    Lightweight ambiguity detector for common multi-meaning terms.
-    This is a rule-based first pass before LLM reasoning.
-    """
-    q = raw_query.strip().lower()
+    q = raw_query.strip().lower().replace("?", "")
 
     ambiguous_terms = {
         "rag": {
@@ -48,13 +44,6 @@ def _is_potentially_ambiguous_query(raw_query: str) -> Dict:
                 'or "Red-Amber-Green" in project/status reporting?'
             )
         },
-        "api gateway": {
-            "topic": "API gateway",
-            "question": (
-                "Do you want a software architecture explanation of API Gateway, "
-                "or are you referring to a specific API gateway in your project?"
-            )
-        },
         "orchestrator": {
             "topic": "orchestrator",
             "question": (
@@ -62,12 +51,17 @@ def _is_potentially_ambiguous_query(raw_query: str) -> Dict:
                 "or a project-specific orchestrator in your uploaded documents?"
             )
         },
+        "api gateway": {
+            "topic": "API gateway",
+            "question": (
+                "Do you want a general software architecture explanation of API Gateway, "
+                "or are you referring to a specific project component?"
+            )
+        },
     }
 
-    normalized = q.replace("?", "").strip()
-
     for term, meta in ambiguous_terms.items():
-        if normalized == f"what is {term}" or normalized == term:
+        if q == term or q == f"what is {term}":
             return {
                 "is_ambiguous": True,
                 "topic": meta["topic"],
@@ -84,31 +78,101 @@ def _is_potentially_ambiguous_query(raw_query: str) -> Dict:
 def _default_background_chunk_types(query_type: str) -> List[str]:
     if query_type == "concept_explanation":
         return [
-            "role_identity",
-            "domain_context",
             "technical_exposure",
             "knowledge_boundary",
-            "expression_preference",
+            "expression_preference"
         ]
     if query_type == "comparison_question":
         return [
-            "role_identity",
             "technical_exposure",
-            "expression_preference",
-            "current_project",
-        ]
-    if query_type in {"project_explanation", "document_based_question", "workflow_explanation"}:
-        return [
-            "role_identity",
             "knowledge_boundary",
             "expression_preference",
+            "role_identity"
+        ]
+    if query_type in {"project_explanation", "document_based_question"}:
+        return [
             "current_project",
+            "role_identity",
+            "expression_preference"
+        ]
+    if query_type == "workflow_explanation":
+        return [
+            "knowledge_boundary",
+            "expression_preference",
+            "role_identity",
+            "current_project"
         ]
     return [
         "role_identity",
-        "domain_context",
         "technical_exposure",
+        "expression_preference"
     ]
+
+
+def _smart_chunk_selection(query_type: str, topic: str, intent: str, domain: str) -> List[str]:
+    """
+    Smarter chunk selection for Person 2.
+    This is the main fix for problem 1.
+    """
+    qt = (query_type or "").lower()
+    tp = (topic or "").lower()
+    it = (intent or "").lower()
+    dm = (domain or "").lower()
+
+    # Project / uploaded-doc style questions
+    if qt in {"project_explanation", "document_based_question"}:
+        return [
+            "current_project",
+            "role_identity",
+            "expression_preference"
+        ]
+
+    # Workflow / architecture style questions
+    if qt == "workflow_explanation":
+        return [
+            "knowledge_boundary",
+            "expression_preference",
+            "technical_exposure",
+            "role_identity"
+        ]
+
+    # Comparison questions
+    if qt == "comparison_question":
+        return [
+            "technical_exposure",
+            "knowledge_boundary",
+            "expression_preference",
+            "role_identity"
+        ]
+
+    # Concept explanations
+    if qt == "concept_explanation":
+        # Orchestrator / architecture-like concept
+        if any(x in tp for x in ["orchestrator", "system", "architecture", "agent"]) or \
+           any(x in it for x in ["role", "function", "workflow"]) or \
+           "artificial intelligence" in dm or "ai" in dm:
+            return [
+                "knowledge_boundary",
+                "expression_preference",
+                "technical_exposure"
+            ]
+
+        # Definitions like RAG / vector DB / API gateway
+        if any(x in tp for x in ["rag", "retrieval", "vector", "database", "api", "gateway"]):
+            return [
+                "technical_exposure",
+                "expression_preference",
+                "knowledge_boundary"
+            ]
+
+        # Generic concept fallback
+        return [
+            "technical_exposure",
+            "expression_preference",
+            "domain_context"
+        ]
+
+    return _default_background_chunk_types(qt)
 
 
 def understand_query(
@@ -188,6 +252,7 @@ Important routing rules:
    - What is retrieval-augmented generation?
    - What is a vector database?
    - Explain API gateway
+   - Explain what an orchestrator does in an AI agent system
    then this is usually:
    - query_type = "concept_explanation"
    - requires_external_knowledge = true
@@ -195,7 +260,7 @@ Important routing rules:
 
 2. Only set requires_project_context = true when the question clearly depends on uploaded project documents, such as:
    - Explain this project
-   - Explain this architecture
+   - Explain this architecture in the uploaded note
    - What is the study design in the uploaded document?
    - Summarize the uploaded note
    - What does this project document say about X?
@@ -263,14 +328,19 @@ Current context:
         if not isinstance(result.get(key), bool):
             result[key] = False
 
-    if not isinstance(result.get("recommended_background_chunk_types"), list):
-        result["recommended_background_chunk_types"] = _default_background_chunk_types(
-            result.get("query_type", "concept_explanation")
-        )
+    # -----------------------------
+    # SMART FIX FOR PROBLEM 1
+    # Override chunk selection with smarter logic
+    # -----------------------------
+    smart_chunks = _smart_chunk_selection(
+        query_type=result.get("query_type", ""),
+        topic=result.get("topic", ""),
+        intent=result.get("intent", ""),
+        domain=result.get("domain", "")
+    )
 
     result["recommended_background_chunk_types"] = [
-        x for x in result["recommended_background_chunk_types"]
-        if x in valid_chunk_types
+        x for x in smart_chunks if x in valid_chunk_types
     ]
 
     if not result["recommended_background_chunk_types"]:
@@ -290,6 +360,7 @@ Current context:
 
     result["user_id"] = user_id
     result["raw_query"] = raw_query
+
     if not result.get("query_id"):
         result["query_id"] = "q_auto"
 
