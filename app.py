@@ -1,6 +1,7 @@
 import os
 import tempfile
 import streamlit as st
+from openai import OpenAI
 
 from rag_system import initialize_rag, load_pdf, load_docx
 from background_memory import onboard_user_background, retrieve_user_background
@@ -38,9 +39,11 @@ def load_resume_text(uploaded_file) -> str:
 def display_citations(citations):
     if citations:
         for c in citations:
-            page = f"p.{c['page']}" if c["page"] else "doc"
+            page = f"p.{c['page']}" if c.get("page") else "doc"
             st.write(
-                f"{c['source_file']} | {page} | {c['section']} | {c['aim']} | score={c['score']}"
+                f"{c.get('source_file', 'unknown')} | {page} | "
+                f"{c.get('section', 'unknown')} | {c.get('aim', 'unknown')} | "
+                f"score={c.get('score', 'n/a')}"
             )
     else:
         st.write("No citations available.")
@@ -57,11 +60,79 @@ def build_user_profile_from_background(retrieved_background: dict) -> dict:
     }
 
 
+def answer_with_external_knowledge(
+    query: str,
+    user_profile: dict | None = None,
+    role: str = "general"
+) -> dict:
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        raise EnvironmentError("OPENAI_API_KEY is not set.")
+
+    client = OpenAI(api_key=api_key)
+
+    technical_level = "medium"
+    goal = "understanding"
+    short_reason = ""
+
+    if user_profile:
+        technical_level = user_profile.get("technical_level", "medium")
+        goal = user_profile.get("goal", "understanding")
+        short_reason = user_profile.get("short_reason", "")
+
+    prompt = f"""
+You are a helpful assistant.
+
+The user is asking a general concept question, not a question tied to the uploaded project PDF.
+
+User role: {role}
+Technical level: {technical_level}
+Goal: {goal}
+Profile hint: {short_reason}
+
+Instructions:
+- Answer clearly and accurately using general knowledge.
+- Adapt the explanation to the user's likely background.
+- If the user is less technical, simplify jargon.
+- If the user is more technical, include more mechanism/detail.
+- Do not say "the evidence is insufficient."
+- Do not say "human review required."
+- Do not mention missing project documents.
+
+Question:
+{query}
+"""
+
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        temperature=0.2,
+        messages=[
+            {
+                "role": "system",
+                "content": "You explain concepts clearly and adapt explanations to the user's background."
+            },
+            {
+                "role": "user",
+                "content": prompt
+            },
+        ],
+    )
+
+    answer = response.choices[0].message.content.strip()
+
+    return {
+        "answer": answer,
+        "citations": [],
+        "retrieved_context": "External/general knowledge route"
+    }
+
+
 if "rag" not in st.session_state:
     with st.spinner("Loading RAG system..."):
-        # 建议把你的项目 PDF 放在 data/docs/ 里
-        # 如果你现在仍然放在根目录，就改回 docs_dir="."
-        st.session_state.rag = initialize_rag(docs_dir=".", force_rebuild=False)
+        st.session_state.rag = initialize_rag(
+            docs_dir=".",
+            force_rebuild=False
+        )
 
 rag = st.session_state.rag
 
@@ -82,7 +153,6 @@ manual_role = st.sidebar.selectbox(
 )
 
 show_context = st.sidebar.checkbox("Show retrieved context", value=False)
-
 show_debug = st.sidebar.checkbox("Show debug info", value=True)
 
 uploaded_file = st.sidebar.file_uploader(
@@ -125,7 +195,7 @@ if st.button("Run"):
             routing_decision = None
 
             # -----------------------------
-            # Step 1: Onboard / update background memory
+            # Step 1: Background onboarding
             # -----------------------------
             if uploaded_file is not None and use_resume_profile:
                 with st.spinner("Reading resume and onboarding user background..."):
@@ -142,7 +212,7 @@ if st.button("Run"):
                     )
 
             # -----------------------------
-            # Step 2: Person 2 - Query understanding + routing
+            # Step 2: Query understanding + routing
             # -----------------------------
             with st.spinner("Understanding query and planning workflow..."):
                 orchestration_result = process_query(
@@ -169,10 +239,9 @@ if st.button("Run"):
                     st.json(routing_decision)
 
             # -----------------------------
-            # Step 4: Retrieval + generation routes
+            # Step 4: Non-clarification routes
             # -----------------------------
             else:
-                # Background retrieval if requested
                 if "background_request" in routing_decision:
                     bg_req = routing_decision["background_request"]
 
@@ -193,7 +262,6 @@ if st.button("Run"):
                 else:
                     effective_role = manual_role
 
-                # Show debug info
                 if show_debug:
                     st.subheader("Query Understanding")
                     st.json(query_understanding)
@@ -219,25 +287,34 @@ if st.button("Run"):
                     )
 
                 # -----------------------------
-                # Step 5: Project knowledge RAG + profile-aware generation
+                # Step 5: Generate answer
                 # -----------------------------
                 with st.spinner("Generating answer..."):
-                    result = rag.answer_question(
-                        query=query,
-                        mode=mode,
-                        role=effective_role,
-                        user_profile=inferred_profile
-                    )
+                    route = routing_decision["route"]
+
+                    if route == "external_knowledge_then_expression":
+                        result = answer_with_external_knowledge(
+                            query=query,
+                            user_profile=inferred_profile,
+                            role=effective_role
+                        )
+                    else:
+                        result = rag.answer_question(
+                            query=query,
+                            mode=mode,
+                            role=effective_role,
+                            user_profile=inferred_profile
+                        )
 
                 st.subheader("Answer")
                 st.write(result["answer"])
 
                 st.subheader("Top Citations")
-                display_citations(result["citations"])
+                display_citations(result.get("citations", []))
 
                 if show_context:
                     st.subheader("Retrieved Context")
-                    st.text(result["retrieved_context"])
+                    st.text(result.get("retrieved_context", ""))
 
         except Exception as e:
             st.error(f"Error: {e}")
