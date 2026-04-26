@@ -44,3 +44,5 @@ sentence-transformers>=2.6.1
 rank-bm25>=0.2.2
 torch>=2.2.1
 openai>=1.12.0
+
+fpdf2>=2.7.8
