@@ -78,17 +78,17 @@ Improves domain-specific interpretation
 ⚙️ Outputs
 Each run generates:
 
-*_coding.csv → segment-level coding results
+- *_coding.csv → segment-level coding results
 
-batch_summary_coding.csv → merged dataset
+- batch_summary_coding.csv → merged dataset
 
-lda_topics.csv → topic modeling results
+- lda_topics.csv → topic modeling results
 
-llm_vs_human_comparison.csv → agreement metrics (if provided)
+- llm_vs_human_comparison.csv → agreement metrics (if provided)
 
-envio_coding_report.pdf → final report
+- envio_coding_report.pdf → final report
 
-.zip → all outputs bundled
+- .zip → all outputs bundled
 
 ⚙️ How to Run
 1. Install dependencies
