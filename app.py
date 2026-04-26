@@ -1,8 +1,13 @@
 import os
+import glob
 import tempfile
 import json
 import streamlit as st
 from openai import OpenAI
+from sklearn.metrics import cohen_kappa_score, f1_score
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
 
 from rag_system import initialize_rag, load_pdf, load_docx
 from background_memory import onboard_user_background, retrieve_user_background
@@ -11,7 +16,6 @@ from query_orchestrator import process_query
 st.set_page_config(page_title="TechMPower RAG Assistant", layout="wide")
 st.title("TechMPower RAG Assistant")
 st.caption("Document-grounded RAG system with background-aware personalization")
-
 
 # -----------------------------
 # Helpers
@@ -38,169 +42,12 @@ def load_transcript_text(uploaded_file) -> str:
         if os.path.exists(tmp_path):
             os.remove(tmp_path)
 
-
-def display_citations(citations):
-    if citations:
-        for c in citations:
-            page = f"p.{c['page']}" if c.get("page") else "doc"
-            st.write(
-                f"{c.get('source_file', 'unknown')} | {page} | "
-                f"{c.get('section', 'unknown')} | {c.get('aim', 'unknown')} | "
-                f"score={c.get('score', 'n/a')}"
-            )
-    else:
-        st.write("No citations available.")
-
-
-def build_user_profile_from_background(retrieved_background: dict) -> dict:
-    structured = (retrieved_background or {}).get("structured_profile") or {}
-    role = structured.get("role_lens", "general")
-    if role == "product_manager":
-        role = "pm"
-    return {
-        "role": role,
-        "technical_level": structured.get("technical_depth", "medium"),
-        "goal": "understanding",
-        "short_reason": structured.get("short_reason", "")
-    }
-
-
-def answer_with_external_knowledge(query: str, user_profile=None, role="general") -> dict:
-    api_key = os.environ.get("OPENAI_API_KEY")
-    if not api_key:
-        raise EnvironmentError("OPENAI_API_KEY is not set.")
-
-    client = OpenAI(api_key=api_key)
-    technical_level = user_profile.get("technical_level", "medium") if user_profile else "medium"
-    goal = user_profile.get("goal", "understanding") if user_profile else "understanding"
-    short_reason = user_profile.get("short_reason", "") if user_profile else ""
-
+def run_llm_coding(text_segment, codebook, client):
     prompt = f"""
-You are a helpful assistant.
-
-The user is asking a general concept question.
-
-User role: {role}
-Technical level: {technical_level}
-Goal: {goal}
-Profile hint: {short_reason}
-
-Instructions:
-- Answer clearly and accurately using general knowledge.
-- Adapt explanation to user's background.
-- Role-specific emphasis:
-    - business: practical meaning, workflow, value
-    - pm: workflow, dependencies, deliverables
-    - engineer: architecture, tradeoffs, mechanism
-- Adjust jargon based on technical level.
-
-Question:
-{query}
-"""
-    response = client.chat.completions.create(
-        model="gpt-4o-mini",
-        temperature=0.2,
-        messages=[
-            {"role": "system", "content": "Explain clearly and adapt to user's background."},
-            {"role": "user", "content": prompt},
-        ],
-    )
-    answer = response.choices[0].message.content.strip()
-    return {"answer": answer, "citations": [], "retrieved_context": "External/general knowledge route"}
-
-
-# -----------------------------
-# Init RAG
-# -----------------------------
-if "rag" not in st.session_state:
-    with st.spinner("Loading RAG system..."):
-        st.session_state.rag = initialize_rag(docs_dir=".", force_rebuild=False)
-rag = st.session_state.rag
-
-
-# -----------------------------
-# Sidebar
-# -----------------------------
-st.sidebar.header("Settings")
-mode = st.sidebar.selectbox("Choose mode", ["qa", "summary", "coding"])
-manual_role = st.sidebar.selectbox("Choose response perspective", ["general", "pm", "engineer", "business"])
-show_context = st.sidebar.checkbox("Show retrieved context", value=False)
-show_debug = st.sidebar.checkbox("Show debug info", value=True)
-uploaded_file = st.sidebar.file_uploader("Upload transcript (PDF/DOCX/TXT)", type=["pdf", "docx", "txt"])
-use_resume_profile = st.sidebar.checkbox("Use uploaded resume to infer profile", value=True)
-allow_manual_override = st.sidebar.checkbox("Allow manual role override", value=True)
-user_id = st.sidebar.text_input("User ID", value="demo_user")
-query = st.text_area("Enter your question or paste transcript for coding", height=140)
-
-
-# -----------------------------
-# Run
-# -----------------------------
-if st.button("Run"):
-    if not query.strip():
-        st.warning("Please enter a question or transcript.")
-    else:
-        try:
-            inferred_profile = None
-            effective_role = manual_role
-            retrieved_background = None
-            orchestration_result = None
-
-            # Step 1: Background onboarding
-            if uploaded_file and use_resume_profile:
-                with st.spinner("Reading transcript and onboarding background..."):
-                    transcript_text = load_transcript_text(uploaded_file)
-                    onboard_user_background(user_id=user_id, raw_background_inputs=[{"source_type": "resume", "raw_text": transcript_text}])
-
-            # Step 2: Query understanding + routing
-            with st.spinner("Understanding query and planning workflow..."):
-                orchestration_result = process_query(user_id=user_id, raw_query=query, has_uploaded_project_doc=True)
-            query_understanding = orchestration_result["query_understanding_object"]
-            routing_decision = orchestration_result["routing_decision"]
-
-            # Step 3: Clarification route
-            if routing_decision["route"] == "clarification":
-                st.subheader("Clarification Needed")
-                st.write(routing_decision["message"])
-                if show_debug:
-                    st.subheader("Query Understanding"); st.json(query_understanding)
-                    st.subheader("Routing Decision"); st.json(routing_decision)
-
-            # Step 4: Retrieval + generation
-            else:
-                if "background_request" in routing_decision:
-                    bg_req = routing_decision["background_request"]
-                    retrieved_background = retrieve_user_background(user_id=bg_req["user_id"], query=bg_req["query"], recommended_chunk_types=bg_req["recommended_background_chunk_types"])
-                    if retrieved_background.get("structured_profile"):
-                        inferred_profile = build_user_profile_from_background(retrieved_background)
-
-                # Effective role determination
-                if inferred_profile:
-                    effective_role = manual_role if (allow_manual_override and manual_role != "general") else inferred_profile["role"]
-                else:
-                    effective_role = manual_role
-
-                if show_debug:
-                    st.subheader("Active Profile")
-                    st.json({"effective_role_used_for_generation": effective_role, "inferred_profile": inferred_profile, "background_retrieval": retrieved_background})
-
-                # Step 5: Generate output
-                with st.spinner("Generating output..."):
-                    if mode == "coding":
-                        codebook = ["environmental_barrier", "social_support", "healthcare_access", "stigma", "mental_health"]
-                        chunks = [query[i:i+2000] for i in range(0, len(query), 2000)]
-                        aggregated_output = []
-                        api_key = os.environ.get("OPENAI_API_KEY")
-                        if not api_key:
-                            st.error("OPENAI_API_KEY not set.")
-                        else:
-                            client = OpenAI(api_key=api_key)
-                            for chunk in chunks:
-                                prompt = f"""
 You are a qualitative research coding assistant.
 
 Transcript segment:
-{chunk}
+{text_segment}
 
 Task:
 - Assign thematic codes to each meaningful segment.
@@ -210,25 +57,135 @@ Task:
   {{"text": "Segment text here","codes":["relevant_code1","relevant_code2"]}}
 ]
 """
-                                response = client.chat.completions.create(
-                                    model="gpt-4o-mini", temperature=0,
-                                    messages=[{"role":"system","content":"Expert qualitative coding assistant."},{"role":"user","content":prompt}]
-                                )
-                                content = response.choices[0].message.content.strip()
-                                try: parsed = json.loads(content); aggregated_output.extend(parsed)
-                                except json.JSONDecodeError: aggregated_output.append({"text": chunk,"codes":["PARSE_ERROR"],"raw": content})
+    response = client.chat.completions.create(
+        model="gpt-4o-mini", temperature=0,
+        messages=[{"role":"system","content":"Expert qualitative coding assistant."},
+                  {"role":"user","content":prompt}]
+    )
+    content = response.choices[0].message.content.strip()
+    try:
+        return json.loads(content)
+    except json.JSONDecodeError:
+        return [{"text": text_segment, "codes": ["PARSE_ERROR"], "raw": content}]
 
-                        st.subheader("Coding Output (JSON)")
-                        st.json(aggregated_output)
-                    else:
-                        route = routing_decision["route"]
-                        if route == "external_knowledge_then_expression":
-                            result = answer_with_external_knowledge(query=query, user_profile=inferred_profile, role=effective_role)
-                        else:
-                            result = rag.answer_question(query=query, mode=mode, role=effective_role, user_profile=inferred_profile)
-                        st.subheader("Answer"); st.write(result["answer"])
-                        st.subheader("Top Citations"); display_citations(result.get("citations", []))
-                        if show_context: st.subheader("Retrieved Context"); st.text(result.get("retrieved_context", ""))
+def display_citations(citations):
+    if citations:
+        for c in citations:
+            page = f"p.{c['page']}" if c.get("page") else "doc"
+            st.write(f"{c.get('source_file','unknown')} | {page} | {c.get('section','unknown')} | {c.get('aim','unknown')} | score={c.get('score','n/a')}")
+    else:
+        st.write("No citations available.")
 
-        except Exception as e:
-            st.error(f"Error: {e}")
+def build_user_profile_from_background(retrieved_background: dict) -> dict:
+    structured = (retrieved_background or {}).get("structured_profile") or {}
+    role = structured.get("role_lens", "general")
+    if role == "product_manager":
+        role = "pm"
+    return {"role": role, "technical_level": structured.get("technical_depth","medium"), "goal":"understanding", "short_reason":structured.get("short_reason","")}
+
+# -----------------------------
+# Init RAG
+# -----------------------------
+if "rag" not in st.session_state:
+    with st.spinner("Loading RAG system..."):
+        st.session_state.rag = initialize_rag(docs_dir=".", force_rebuild=False)
+rag = st.session_state.rag
+
+# -----------------------------
+# Sidebar
+# -----------------------------
+st.sidebar.header("Settings")
+mode = st.sidebar.selectbox("Choose mode", ["qa", "summary", "coding"])
+manual_role = st.sidebar.selectbox("Choose response perspective", ["general", "pm", "engineer", "business"])
+show_context = st.sidebar.checkbox("Show retrieved context", value=False)
+show_debug = st.sidebar.checkbox("Show debug info", value=True)
+uploaded_file = st.sidebar.file_uploader("Upload transcript (PDF/DOCX/TXT)", type=["pdf","docx","txt"])
+batch_folder = st.sidebar.text_input("Batch folder path for transcripts (optional)")
+use_resume_profile = st.sidebar.checkbox("Use uploaded resume to infer profile", value=True)
+allow_manual_override = st.sidebar.checkbox("Allow manual role override", value=True)
+user_id = st.sidebar.text_input("User ID", value="demo_user")
+query = st.text_area("Enter your question or paste transcript for coding", height=140)
+
+# -----------------------------
+# Run
+# -----------------------------
+if st.button("Run"):
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        st.error("OPENAI_API_KEY not set.")
+    client = OpenAI(api_key=api_key)
+
+    # -----------------------------
+    # Batch processing模式
+    # -----------------------------
+    if batch_folder and mode=="coding":
+        st.info(f"Processing batch folder: {batch_folder}")
+        output_folder = os.path.join(batch_folder, "llm_outputs")
+        os.makedirs(output_folder, exist_ok=True)
+        codebook = ["environmental_barrier","social_support","healthcare_access","stigma","mental_health"]
+        summary_list = []
+
+        for f in glob.glob(os.path.join(batch_folder,"*.*")):
+            base_name = os.path.splitext(os.path.basename(f))[0]
+            text = load_transcript_text(open(f,"rb"))
+            chunks = [text[i:i+2000] for i in range(0,len(text),2000)]
+            aggregated_output = []
+            for chunk in chunks:
+                aggregated_output.extend(run_llm_coding(chunk, codebook, client))
+            output_file = os.path.join(output_folder,f"{base_name}_coding.json")
+            with open(output_file,"w",encoding="utf-8") as of:
+                json.dump(aggregated_output,of,indent=2,ensure_ascii=False)
+            st.write(f"Saved LLM coding for {base_name}")
+
+        st.success(f"Batch processing done. Outputs in {output_folder}")
+
+    # -----------------------------
+    # 单文件交互模式
+    # -----------------------------
+    elif query.strip() or uploaded_file:
+        inferred_profile = None
+        effective_role = manual_role
+        retrieved_background = None
+
+        # 背景记忆
+        if uploaded_file and use_resume_profile:
+            transcript_text = load_transcript_text(uploaded_file)
+            onboard_user_background(user_id=user_id, raw_background_inputs=[{"source_type":"resume","raw_text":transcript_text}])
+
+        orchestration_result = process_query(user_id=user_id, raw_query=query, has_uploaded_project_doc=True)
+        routing_decision = orchestration_result["routing_decision"]
+
+        # 决定角色
+        if "background_request" in routing_decision:
+            bg_req = routing_decision["background_request"]
+            retrieved_background = retrieve_user_background(user_id=bg_req["user_id"], query=bg_req["query"], recommended_chunk_types=bg_req["recommended_background_chunk_types"])
+            if retrieved_background.get("structured_profile"):
+                inferred_profile = build_user_profile_from_background(retrieved_background)
+        if inferred_profile:
+            effective_role = manual_role if (allow_manual_override and manual_role!="general") else inferred_profile["role"]
+
+        # 显示 debug
+        if show_debug:
+            st.subheader("Routing Decision / Active Profile")
+            st.json({"routing": routing_decision, "profile": inferred_profile, "effective_role": effective_role})
+
+        # 生成输出
+        if mode=="coding":
+            codebook = ["environmental_barrier","social_support","healthcare_access","stigma","mental_health"]
+            text = transcript_text if uploaded_file else query
+            chunks = [text[i:i+2000] for i in range(0,len(text),2000)]
+            aggregated_output = []
+            for chunk in chunks:
+                aggregated_output.extend(run_llm_coding(chunk, codebook, client))
+            st.subheader("Coding Output (JSON)")
+            st.json(aggregated_output)
+        else:
+            # QA/Summary模式
+            result = rag.answer_question(query=query, mode=mode, role=effective_role, user_profile=inferred_profile)
+            st.subheader("Answer")
+            st.write(result["answer"])
+            st.subheader("Top Citations")
+            display_citations(result.get("citations",[]))
+            if show_context:
+                st.subheader("Retrieved Context")
+                st.text(result.get("retrieved_context",""))
