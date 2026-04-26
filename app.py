@@ -13,6 +13,11 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from fpdf import FPDF
 from sklearn.metrics import cohen_kappa_score, f1_score
+from sklearn.feature_extraction.text import CountVectorizer
+from sklearn.decomposition import LatentDirichletAllocation
+
+import requests
+from bs4 import BeautifulSoup
 
 from rag_system import initialize_rag, load_pdf, load_docx
 from background_memory import onboard_user_background, retrieve_user_background
@@ -20,12 +25,9 @@ from background_memory import onboard_user_background, retrieve_user_background
 
 st.set_page_config(page_title="ENVIO LLM Coding Assistant", layout="wide")
 st.title("ENVIO LLM Coding Assistant")
-st.caption("Document-grounded LLM coding and topic modeling for HIV care engagement transcripts")
+st.caption("Document-grounded LLM coding, topic modeling, and LLM-human coding comparison for ENVIO transcripts")
 
 
-# -----------------------------
-# Utilities
-# -----------------------------
 CODEBOOK = [
     "environmental_barrier",
     "social_support",
@@ -39,10 +41,60 @@ DEFAULT_CODING_QUERY = (
 )
 
 
+# -----------------------------
+# Basic utilities
+# -----------------------------
 def safe_filename(name: str) -> str:
-    return re.sub(r"[^a-zA-Z0-9_.-]+", "_", name).strip("_")
+    return re.sub(r"[^a-zA-Z0-9_.-]+", "_", str(name)).strip("_")
 
 
+def infer_participant_id(names):
+    joined = " ".join(names)
+    match = re.search(r"\b(\d{3}[A-Za-z]?)\b", joined)
+    if match:
+        return match.group(1)
+    return safe_filename(os.path.splitext(names[0])[0][:40])
+
+
+def infer_date_from_name(name):
+    match = re.search(r"(20\d{2})[-_/](\d{2})[-_/](\d{2})", str(name))
+    if match:
+        return f"{match.group(1)}-{match.group(2)}-{match.group(3)}"
+    return ""
+
+
+def infer_source_type(name, text=""):
+    low = f"{name} {text[:1000]}".lower()
+
+    if any(x in low for x in ["costing", "cost questions", "cost-effectiveness", "cost "]):
+        return "costing"
+    if any(x in low for x in ["policy", "protocol", "irb", "datasheet", "human subjects", "privacy", "security"]):
+        return "policy"
+    if any(x in low for x in ["interview", "qual interview", "transcript", "participant", "moderator"]):
+        return "interview"
+
+    return "other"
+
+
+def chunk_text(text: str, chunk_chars: int = 3500, overlap_chars: int = 300):
+    text = text.strip()
+    if not text:
+        return []
+
+    chunks = []
+    start = 0
+    while start < len(text):
+        end = min(len(text), start + chunk_chars)
+        chunks.append(text[start:end])
+        if end == len(text):
+            break
+        start = max(0, end - overlap_chars)
+    return chunks
+
+
+# -----------------------------
+# Load uploaded files and URLs
+# -----------------------------
 def load_transcript_text(uploaded_file) -> str:
     uploaded_file.seek(0)
     suffix = os.path.splitext(uploaded_file.name)[1].lower()
@@ -67,22 +119,83 @@ def load_transcript_text(uploaded_file) -> str:
             os.remove(tmp_path)
 
 
-def chunk_text(text: str, chunk_chars: int = 3500, overlap_chars: int = 300):
-    text = text.strip()
-    if not text:
+def load_text_from_url(url):
+    try:
+        headers = {"User-Agent": "Mozilla/5.0"}
+        r = requests.get(url, headers=headers, timeout=20)
+        r.raise_for_status()
+
+        content_type = r.headers.get("content-type", "").lower()
+
+        if url.lower().endswith(".pdf") or "application/pdf" in content_type:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+                tmp.write(r.content)
+                tmp_path = tmp.name
+            try:
+                pages = load_pdf(tmp_path)
+                return "\n".join(page_text for _, page_text in pages)
+            finally:
+                if os.path.exists(tmp_path):
+                    os.remove(tmp_path)
+
+        soup = BeautifulSoup(r.text, "html.parser")
+        for tag in soup(["script", "style", "nav", "footer", "header"]):
+            tag.decompose()
+        return soup.get_text(separator=" ", strip=True)
+
+    except Exception as e:
+        st.warning(f"Could not load URL: {url}. Reason: {e}")
+        return ""
+
+
+def build_source_records(uploaded_files, url_input, merge_files=True):
+    source_records = []
+
+    if uploaded_files:
+        for f in uploaded_files:
+            text = load_transcript_text(f)
+            if text.strip():
+                source_records.append(
+                    {
+                        "source_name": f.name,
+                        "source_text": text,
+                        "source_kind": infer_source_type(f.name, text),
+                        "source_date": infer_date_from_name(f.name),
+                    }
+                )
+
+    if url_input.strip():
+        urls = [u.strip() for u in url_input.splitlines() if u.strip()]
+        for url in urls:
+            text = load_text_from_url(url)
+            if text.strip():
+                source_records.append(
+                    {
+                        "source_name": url,
+                        "source_text": text,
+                        "source_kind": infer_source_type(url, text),
+                        "source_date": infer_date_from_name(url),
+                    }
+                )
+
+    if not source_records:
         return []
 
-    chunks = []
-    start = 0
-    while start < len(text):
-        end = min(len(text), start + chunk_chars)
-        chunks.append(text[start:end])
-        if end == len(text):
-            break
-        start = max(0, end - overlap_chars)
-    return chunks
+    if merge_files:
+        participant_id = infer_participant_id([r["source_name"] for r in source_records])
+        for r in source_records:
+            r["participant_id"] = participant_id
+        return source_records
+
+    for r in source_records:
+        r["participant_id"] = infer_participant_id([r["source_name"]])
+
+    return source_records
 
 
+# -----------------------------
+# LLM coding
+# -----------------------------
 def extract_json_object(content: str):
     content = content.strip()
 
@@ -105,41 +218,46 @@ def extract_json_object(content: str):
     raise json.JSONDecodeError("Could not parse JSON", content, 0)
 
 
-def run_llm_coding_with_context(text_segment, codebook, client, retrieved_context="", source_section=""):
+def run_llm_coding_with_context(text_segment, codebook, client, retrieved_context="", source_section="", source_kind=""):
     prompt = f"""
 You are an expert qualitative research coding assistant for the ENVIO / TechMPower study.
 
 Research goal:
-Compare LLM-generated qualitative coding against human coding for de-identified interview transcripts.
-The substantive focus is how environmental, institutional, social, and healthcare factors influence HIV care engagement and related implementation processes.
+Compare LLM-generated qualitative coding against human coding for de-identified qualitative transcripts.
+The focus is how environmental, institutional, social, mental health, stigma, and healthcare factors influence HIV care engagement.
+
+Source type:
+{source_kind}
+
+Source section:
+{source_section}
 
 Allowed codebook:
 {codebook}
 
-Transcript source section:
-{source_section}
-
-Transcript segment:
+Transcript or document segment:
 {text_segment}
 
 Relevant RAG context from project documents:
 {retrieved_context}
 
 Instructions:
-1. Split the transcript segment into meaningful qualitative units.
+1. Split the segment into meaningful qualitative units.
 2. Assign zero, one, or multiple codes from the allowed codebook only.
 3. Do not invent codes outside the codebook.
 4. Preserve short evidence excerpts.
-5. Output ONLY valid JSON. No markdown. No explanation.
+5. If the segment is policy/protocol material, code only if it clearly relates to the codebook.
+6. Output ONLY valid JSON. No markdown. No explanation.
 
 Required JSON schema:
 {{
   "segments": [
     {{
-      "text": "meaningful transcript unit",
+      "text": "meaningful unit",
       "codes": ["code1", "code2"],
       "rationale": "brief reason grounded in the text",
-      "source_section": "{source_section}"
+      "source_section": "{source_section}",
+      "source_type": "{source_kind}"
     }}
   ]
 }}
@@ -149,10 +267,7 @@ Required JSON schema:
         model="gpt-4o-mini",
         temperature=0,
         messages=[
-            {
-                "role": "system",
-                "content": "You are a careful qualitative coding assistant. Return strict JSON only.",
-            },
+            {"role": "system", "content": "You are a careful qualitative coding assistant. Return strict JSON only."},
             {"role": "user", "content": prompt},
         ],
     )
@@ -169,53 +284,10 @@ Required JSON schema:
                 "codes": ["PARSE_ERROR"],
                 "rationale": "The model output could not be parsed as JSON.",
                 "source_section": source_section,
+                "source_type": source_kind,
                 "raw": content,
             }
         ]
-
-
-def build_combined_transcript(uploaded_files, merge_files=True):
-    if not uploaded_files:
-        return []
-
-    if not merge_files:
-        records = []
-        for f in uploaded_files:
-            text = load_transcript_text(f)
-            records.append(
-                {
-                    "participant_id": os.path.splitext(f.name)[0],
-                    "file_name": f.name,
-                    "text": f"\n\n[SECTION: {f.name}]\n{text}",
-                }
-            )
-        return records
-
-    participant_id = infer_participant_id([f.name for f in uploaded_files])
-    combined_text = ""
-    file_names = []
-
-    for f in uploaded_files:
-        text = load_transcript_text(f)
-        file_names.append(f.name)
-        combined_text += f"\n\n[SECTION: {f.name}]\n{text}\n"
-
-    return [
-        {
-            "participant_id": participant_id,
-            "file_name": " + ".join(file_names),
-            "text": combined_text,
-        }
-    ]
-
-
-def infer_participant_id(file_names):
-    joined = " ".join(file_names)
-    match = re.search(r"\b(\d{3}[A-Za-z]?)\b", joined)
-    if match:
-        return match.group(1)
-    base = os.path.splitext(file_names[0])[0]
-    return safe_filename(base[:40])
 
 
 def get_rag_context(rag, query, profile, use_rag=True):
@@ -235,7 +307,7 @@ def get_rag_context(rag, query, profile, use_rag=True):
         return ""
 
 
-def make_coding_dataframe(segments, participant_id, file_name):
+def make_coding_dataframe(segments, participant_id, source_name, source_kind, source_date):
     rows = []
     for i, seg in enumerate(segments, start=1):
         codes = seg.get("codes", [])
@@ -246,20 +318,36 @@ def make_coding_dataframe(segments, participant_id, file_name):
             {
                 "participant_id": participant_id,
                 "segment_index": i,
-                "file_name": file_name,
+                "source_name": source_name,
+                "source_type": seg.get("source_type", source_kind),
+                "source_date": source_date,
                 "source_section": seg.get("source_section", ""),
                 "text": seg.get("text", ""),
                 "codes": ",".join(codes),
                 "rationale": seg.get("rationale", ""),
             }
         )
+
     return pd.DataFrame(rows)
 
 
+# -----------------------------
+# Analysis
+# -----------------------------
 def code_frequency(df):
     if df.empty or "codes" not in df.columns:
         return pd.Series(dtype=int)
     return df["codes"].fillna("").str.get_dummies(sep=",").sum().sort_values(ascending=False)
+
+
+def code_frequency_by_group(df, group_col):
+    if df.empty or group_col not in df.columns:
+        return pd.DataFrame()
+
+    tmp = df.copy()
+    dummies = tmp["codes"].fillna("").str.get_dummies(sep=",")
+    grouped = pd.concat([tmp[[group_col]], dummies], axis=1).groupby(group_col).sum()
+    return grouped
 
 
 def compare_llm_human(llm_df, human_df, codebook):
@@ -313,7 +401,68 @@ def compare_llm_human(llm_df, human_df, codebook):
     return pd.DataFrame(results)
 
 
-def generate_pdf_report(summary_df, code_counts, comparison_df=None, output_file="report.pdf"):
+def run_lda_topic_modeling(texts, n_topics=5, n_words=8):
+    texts = [str(t) for t in texts if str(t).strip()]
+    if len(texts) < 3:
+        return pd.DataFrame(), pd.DataFrame()
+
+    vectorizer = CountVectorizer(
+        stop_words="english",
+        max_df=0.9,
+        min_df=1,
+        max_features=1000,
+    )
+    X = vectorizer.fit_transform(texts)
+
+    lda = LatentDirichletAllocation(
+        n_components=n_topics,
+        random_state=42,
+        learning_method="batch",
+    )
+    doc_topic = lda.fit_transform(X)
+
+    feature_names = vectorizer.get_feature_names_out()
+
+    topic_rows = []
+    for topic_idx, topic in enumerate(lda.components_):
+        top_idx = topic.argsort()[-n_words:][::-1]
+        words = [feature_names[i] for i in top_idx]
+        topic_rows.append(
+            {
+                "topic_id": topic_idx,
+                "top_words": ", ".join(words),
+            }
+        )
+
+    doc_topic_df = pd.DataFrame(doc_topic, columns=[f"topic_{i}" for i in range(n_topics)])
+    doc_topic_df["dominant_topic"] = doc_topic_df[[f"topic_{i}" for i in range(n_topics)]].idxmax(axis=1)
+
+    return pd.DataFrame(topic_rows), doc_topic_df
+
+
+def run_bertopic_optional(texts):
+    try:
+        from bertopic import BERTopic
+    except Exception:
+        return None, "BERTopic is not installed. Add bertopic to requirements.txt if needed."
+
+    texts = [str(t) for t in texts if str(t).strip()]
+    if len(texts) < 5:
+        return None, "BERTopic needs more text segments."
+
+    try:
+        model = BERTopic(verbose=False)
+        topics, probs = model.fit_transform(texts)
+        info = model.get_topic_info()
+        return info, None
+    except Exception as e:
+        return None, str(e)
+
+
+# -----------------------------
+# Report / ZIP
+# -----------------------------
+def generate_pdf_report(summary_df, code_counts, group_counts=None, topic_df=None, comparison_df=None, output_file="report.pdf"):
     pdf = FPDF()
     pdf.add_page()
     pdf.set_font("Arial", size=12)
@@ -323,17 +472,29 @@ def generate_pdf_report(summary_df, code_counts, comparison_df=None, output_file
 
     pdf.set_font("Arial", size=11)
     pdf.cell(0, 8, txt=f"Total coded segments: {len(summary_df)}", ln=True)
-    pdf.cell(0, 8, txt=f"Total files/participants represented: {summary_df['participant_id'].nunique()}", ln=True)
+    pdf.cell(0, 8, txt=f"Participants represented: {summary_df['participant_id'].nunique()}", ln=True)
+    pdf.cell(0, 8, txt=f"Source types: {', '.join(sorted(summary_df['source_type'].dropna().unique()))}", ln=True)
     pdf.ln(4)
 
-    pdf.set_font("Arial", size=11)
-    pdf.cell(0, 8, txt="Code Frequencies:", ln=True)
+    pdf.cell(0, 8, txt="Overall Code Frequencies:", ln=True)
     for code, count in code_counts.items():
-        safe_line = f"{code}: {int(count)}"
-        pdf.cell(0, 7, txt=safe_line[:110], ln=True)
+        pdf.cell(0, 7, txt=f"{code}: {int(count)}"[:110], ln=True)
+
+    if group_counts is not None and not group_counts.empty:
+        pdf.ln(4)
+        pdf.cell(0, 8, txt="Grouped Code Frequencies by Source Type:", ln=True)
+        for source_type, row in group_counts.iterrows():
+            summary = "; ".join([f"{c}={int(v)}" for c, v in row.items()])
+            pdf.multi_cell(0, 6, txt=f"{source_type}: {summary[:400]}")
+
+    if topic_df is not None and not topic_df.empty:
+        pdf.ln(4)
+        pdf.cell(0, 8, txt="LDA Topics:", ln=True)
+        for _, row in topic_df.iterrows():
+            pdf.multi_cell(0, 6, txt=f"Topic {row['topic_id']}: {row['top_words']}")
 
     if comparison_df is not None and not comparison_df.empty:
-        pdf.ln(5)
+        pdf.ln(4)
         pdf.cell(0, 8, txt="LLM vs Human Coding Comparison:", ln=True)
         for _, row in comparison_df.iterrows():
             line = (
@@ -342,12 +503,11 @@ def generate_pdf_report(summary_df, code_counts, comparison_df=None, output_file
             )
             pdf.cell(0, 7, txt=line[:110], ln=True)
 
-    pdf.ln(5)
+    pdf.ln(4)
     pdf.cell(0, 8, txt="Sample Segments:", ln=True)
     for _, row in summary_df.head(8).iterrows():
         text = str(row["text"]).replace("\n", " ")[:500]
-        codes = str(row["codes"])
-        pdf.multi_cell(0, 6, txt=f"Codes: {codes}\nText: {text}")
+        pdf.multi_cell(0, 6, txt=f"Codes: {row['codes']}\nSource: {row['source_type']}\nText: {text}")
         pdf.ln(2)
 
     pdf.output(output_file)
@@ -383,24 +543,33 @@ mode = st.sidebar.selectbox("Choose mode", ["coding", "qa", "summary"])
 manual_role = st.sidebar.selectbox("Choose response perspective", ["general", "pm", "engineer", "business"])
 
 uploaded_files = st.sidebar.file_uploader(
-    "Upload transcript files (PDF/DOCX/TXT)",
+    "Upload transcript/document files (PDF/DOCX/TXT)",
     type=["pdf", "docx", "txt"],
     accept_multiple_files=True,
 )
 
+url_input = st.sidebar.text_area(
+    "Optional: enter URLs, one per line",
+    placeholder="https://example.com/file.pdf\nhttps://example.com/page",
+)
+
 merge_related_files = st.sidebar.checkbox(
-    "Merge uploaded files as one participant/interview",
+    "Merge uploaded files/URLs as one participant/interview",
     value=True,
 )
 
 use_rag_context = st.sidebar.checkbox("Use RAG context for coding", value=True)
-show_context = st.sidebar.checkbox("Show retrieved context", value=False)
+show_context = st.sidebar.checkbox("Show retrieved context sample", value=False)
 show_debug = st.sidebar.checkbox("Show debug info", value=True)
 
 human_coding_file = st.sidebar.file_uploader(
     "Optional: upload human coding CSV for comparison",
     type=["csv"],
 )
+
+run_lda = st.sidebar.checkbox("Run LDA topic modeling", value=True)
+n_topics = st.sidebar.slider("Number of LDA topics", min_value=2, max_value=10, value=5)
+run_bertopic = st.sidebar.checkbox("Try BERTopic if installed", value=False)
 
 use_resume_profile = st.sidebar.checkbox("Use uploaded transcript to infer profile", value=True)
 allow_manual_override = st.sidebar.checkbox("Allow manual role override", value=True)
@@ -439,60 +608,66 @@ if st.button("Run"):
     task_query = query.strip() or DEFAULT_CODING_QUERY
 
     if mode == "coding":
-        if not uploaded_files:
-            st.warning("Please upload at least one transcript file.")
-            st.stop()
-
-        transcript_records = build_combined_transcript(
-            uploaded_files,
+        source_records = build_source_records(
+            uploaded_files=uploaded_files,
+            url_input=url_input,
             merge_files=merge_related_files,
         )
+
+        if not source_records:
+            st.warning("Please upload files or enter at least one URL.")
+            st.stop()
+
+        if use_resume_profile:
+            try:
+                profile_text = "\n".join([r["source_text"][:3000] for r in source_records])[:8000]
+                onboard_user_background(
+                    user_id=user_id,
+                    raw_background_inputs=[{"source_type": "transcript_or_document", "raw_text": profile_text}],
+                )
+                retrieved_background = retrieve_user_background(
+                    user_id=user_id,
+                    query=task_query,
+                    recommended_chunk_types=[
+                        "knowledge_boundary",
+                        "expression_preference",
+                        "technical_exposure",
+                    ],
+                )
+                if retrieved_background and retrieved_background.get("structured_profile"):
+                    inferred_role = retrieved_background["structured_profile"].get("role_lens", manual_role)
+                    if allow_manual_override and manual_role != "general":
+                        profile["role"] = manual_role
+                    else:
+                        profile["role"] = inferred_role
+            except Exception as e:
+                st.warning(f"Profile inference skipped: {e}")
+
+        st.session_state.users[user_id]["profile"] = profile
 
         all_outputs = []
         generated_files = []
 
         progress = st.progress(0)
-        total_records = len(transcript_records)
+        total_sources = len(source_records)
 
-        for r_idx, record in enumerate(transcript_records, start=1):
-            participant_id = safe_filename(record["participant_id"])
-            fname_base = safe_filename(record["file_name"])
-            text = record["text"]
+        for s_idx, src in enumerate(source_records, start=1):
+            participant_id = safe_filename(src["participant_id"])
+            source_name = src["source_name"]
+            source_kind = src["source_kind"]
+            source_date = src["source_date"]
+            text = src["source_text"]
 
             if not text.strip():
-                st.warning(f"No text extracted from {record['file_name']}.")
+                st.warning(f"No text extracted from {source_name}.")
                 continue
-
-            if use_resume_profile:
-                try:
-                    onboard_user_background(
-                        user_id=user_id,
-                        raw_background_inputs=[{"source_type": "transcript", "raw_text": text[:8000]}],
-                    )
-                    retrieved_background = retrieve_user_background(
-                        user_id=user_id,
-                        query=task_query,
-                        recommended_chunk_types=[
-                            "knowledge_boundary",
-                            "expression_preference",
-                            "technical_exposure",
-                        ],
-                    )
-                    if retrieved_background and retrieved_background.get("structured_profile"):
-                        inferred_role = retrieved_background["structured_profile"].get("role_lens", manual_role)
-                        if allow_manual_override and manual_role != "general":
-                            profile["role"] = manual_role
-                        else:
-                            profile["role"] = inferred_role
-                except Exception as e:
-                    st.warning(f"Profile inference skipped: {e}")
-
-            st.session_state.users[user_id]["profile"] = profile
 
             chunks = chunk_text(text)
             aggregated_output = []
 
             for c_idx, chunk in enumerate(chunks, start=1):
+                source_section = f"{participant_id}|{source_kind}|{safe_filename(source_name)[:60]}|chunk_{c_idx}"
+
                 retrieved_context = get_rag_context(
                     rag=rag,
                     query=chunk[:1200],
@@ -501,7 +676,7 @@ if st.button("Run"):
                 )
 
                 if show_context and c_idx == 1:
-                    with st.expander("Retrieved RAG context sample"):
+                    with st.expander(f"RAG context sample: {source_name}"):
                         st.text(retrieved_context[:3000])
 
                 try:
@@ -510,28 +685,33 @@ if st.button("Run"):
                         codebook=CODEBOOK,
                         client=client,
                         retrieved_context=retrieved_context,
-                        source_section=f"{participant_id}_chunk_{c_idx}",
+                        source_section=source_section,
+                        source_kind=source_kind,
                     )
                     aggregated_output.extend(coded_segments)
                 except Exception as e:
-                    st.error(f"LLM coding failed for {participant_id}, chunk {c_idx}: {e}")
+                    st.error(f"LLM coding failed for {source_name}, chunk {c_idx}: {e}")
                     aggregated_output.append(
                         {
                             "text": chunk,
                             "codes": ["ERROR"],
                             "rationale": str(e),
-                            "source_section": f"{participant_id}_chunk_{c_idx}",
+                            "source_section": source_section,
+                            "source_type": source_kind,
                         }
                     )
 
             df = make_coding_dataframe(
                 aggregated_output,
                 participant_id=participant_id,
-                file_name=record["file_name"],
+                source_name=source_name,
+                source_kind=source_kind,
+                source_date=source_date,
             )
 
-            json_file = os.path.join(user_output_dir, f"{participant_id}_coding.json")
-            csv_file = os.path.join(user_output_dir, f"{participant_id}_coding.csv")
+            base = safe_filename(f"{participant_id}_{source_kind}_{os.path.basename(str(source_name))[:50]}")
+            json_file = os.path.join(user_output_dir, f"{base}_coding.json")
+            csv_file = os.path.join(user_output_dir, f"{base}_coding.csv")
 
             with open(json_file, "w", encoding="utf-8") as f:
                 json.dump(aggregated_output, f, indent=2, ensure_ascii=False)
@@ -541,18 +721,18 @@ if st.button("Run"):
             generated_files.extend([json_file, csv_file])
             all_outputs.append(df)
 
-            st.subheader(f"Coding Output for {participant_id}")
-            st.dataframe(df[["segment_index", "source_section", "text", "codes", "rationale"]].head(30))
+            st.subheader(f"Coding Output: {participant_id} / {source_kind}")
+            st.dataframe(df[["segment_index", "source_type", "source_date", "text", "codes", "rationale"]].head(30))
 
             with open(csv_file, "rb") as f:
                 st.download_button(
-                    label=f"Download {participant_id} CSV",
+                    label=f"Download {base} CSV",
                     data=f,
-                    file_name=f"{participant_id}_coding.csv",
+                    file_name=f"{base}_coding.csv",
                     mime="text/csv",
                 )
 
-            progress.progress(r_idx / total_records)
+            progress.progress(s_idx / total_sources)
 
         if all_outputs:
             summary_df = pd.concat(all_outputs, ignore_index=True)
@@ -561,14 +741,66 @@ if st.button("Run"):
             generated_files.append(summary_csv)
 
             code_counts = code_frequency(summary_df)
+            group_counts = code_frequency_by_group(summary_df, "source_type")
+            participant_counts = code_frequency_by_group(summary_df, "participant_id")
 
-            st.subheader("Batch Code Frequency Table")
+            st.subheader("Overall Code Frequency Table")
             st.dataframe(code_counts.reset_index().rename(columns={"index": "code", 0: "count"}))
 
-            st.subheader("Batch Code Frequency Heatmap")
+            st.subheader("Overall Code Frequency Heatmap")
             fig, ax = plt.subplots(figsize=(10, 2))
             sns.heatmap(code_counts.to_frame().T, annot=True, fmt="d", cmap="Blues", ax=ax)
             st.pyplot(fig)
+
+            if not group_counts.empty:
+                st.subheader("Grouped Heatmap: Interview vs Costing vs Policy")
+                fig2, ax2 = plt.subplots(figsize=(10, max(2, 0.8 * len(group_counts))))
+                sns.heatmap(group_counts, annot=True, fmt="d", cmap="Blues", ax=ax2)
+                st.pyplot(fig2)
+
+            if not participant_counts.empty:
+                st.subheader("Participant-Level Code Heatmap")
+                fig3, ax3 = plt.subplots(figsize=(10, max(2, 0.6 * len(participant_counts))))
+                sns.heatmap(participant_counts, annot=True, fmt="d", cmap="Blues", ax=ax3)
+                st.pyplot(fig3)
+
+            if "source_date" in summary_df.columns and summary_df["source_date"].astype(str).str.len().gt(0).any():
+                st.subheader("Time / Date-Level Code Distribution")
+                date_counts = code_frequency_by_group(summary_df[summary_df["source_date"] != ""], "source_date")
+                if not date_counts.empty:
+                    st.dataframe(date_counts)
+                    fig4, ax4 = plt.subplots(figsize=(10, max(2, 0.6 * len(date_counts))))
+                    sns.heatmap(date_counts, annot=True, fmt="d", cmap="Blues", ax=ax4)
+                    st.pyplot(fig4)
+
+            topic_df = pd.DataFrame()
+            doc_topic_df = pd.DataFrame()
+
+            if run_lda:
+                st.subheader("LDA Topic Modeling")
+                topic_df, doc_topic_df = run_lda_topic_modeling(summary_df["text"].tolist(), n_topics=n_topics)
+                if not topic_df.empty:
+                    st.dataframe(topic_df)
+                    topic_csv = os.path.join(user_output_dir, "lda_topics.csv")
+                    topic_df.to_csv(topic_csv, index=False)
+                    generated_files.append(topic_csv)
+
+                    doc_topic_csv = os.path.join(user_output_dir, "lda_document_topics.csv")
+                    doc_topic_df.to_csv(doc_topic_csv, index=False)
+                    generated_files.append(doc_topic_csv)
+                else:
+                    st.info("Not enough segments for LDA topic modeling.")
+
+            if run_bertopic:
+                st.subheader("BERTopic")
+                bertopic_info, bertopic_error = run_bertopic_optional(summary_df["text"].tolist())
+                if bertopic_error:
+                    st.warning(bertopic_error)
+                else:
+                    st.dataframe(bertopic_info)
+                    bertopic_csv = os.path.join(user_output_dir, "bertopic_topics.csv")
+                    bertopic_info.to_csv(bertopic_csv, index=False)
+                    generated_files.append(bertopic_csv)
 
             comparison_df = None
             if human_coding_file is not None:
@@ -594,7 +826,7 @@ if st.button("Run"):
 
             pdf_file = os.path.join(user_output_dir, "envio_coding_report.pdf")
             try:
-                generate_pdf_report(summary_df, code_counts, comparison_df, pdf_file)
+                generate_pdf_report(summary_df, code_counts, group_counts, topic_df, comparison_df, pdf_file)
                 generated_files.append(pdf_file)
 
                 with open(pdf_file, "rb") as f:
@@ -653,5 +885,8 @@ if st.button("Run"):
                 "merge_related_files": merge_related_files,
                 "use_rag_context": use_rag_context,
                 "uploaded_file_count": len(uploaded_files or []),
+                "has_url_input": bool(url_input.strip()),
+                "lda_enabled": run_lda,
+                "bertopic_enabled": run_bertopic,
             }
         )
