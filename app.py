@@ -11,13 +11,16 @@ from openai import OpenAI
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
-from fpdf import FPDF
 from sklearn.metrics import cohen_kappa_score, f1_score
 from sklearn.feature_extraction.text import CountVectorizer
 from sklearn.decomposition import LatentDirichletAllocation
 
 import requests
 from bs4 import BeautifulSoup
+
+from reportlab.lib.pagesizes import letter
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+from reportlab.lib.styles import getSampleStyleSheet
 
 from rag_system import initialize_rag, load_pdf, load_docx
 from background_memory import onboard_user_background, retrieve_user_background
@@ -280,12 +283,24 @@ def get_rag_context(rag, query, profile, use_rag=True):
         return ""
 
 
+def clean_code_list(codes):
+    if isinstance(codes, list):
+        raw = codes
+    else:
+        raw = str(codes).replace(";", ",").split(",")
+
+    cleaned = []
+    for c in raw:
+        c = str(c).strip()
+        if c and c.lower() not in ["nan", "none", "null", "[]"]:
+            cleaned.append(c)
+    return cleaned
+
+
 def make_coding_dataframe(segments, participant_id, source_name, source_kind, source_date):
     rows = []
     for i, seg in enumerate(segments, start=1):
-        codes = seg.get("codes", [])
-        if not isinstance(codes, list):
-            codes = [str(codes)]
+        codes = clean_code_list(seg.get("codes", []))
         rows.append({
             "participant_id": participant_id,
             "segment_index": i,
@@ -303,21 +318,35 @@ def make_coding_dataframe(segments, participant_id, source_name, source_kind, so
 def code_frequency(df):
     if df.empty or "codes" not in df.columns:
         return pd.Series(dtype=int)
-    return df["codes"].fillna("").str.get_dummies(sep=",").sum().sort_values(ascending=False)
+
+    clean_codes = (
+        df["codes"]
+        .fillna("")
+        .apply(lambda x: ",".join(clean_code_list(x)))
+    )
+
+    counts = clean_codes.str.get_dummies(sep=",").sum().sort_values(ascending=False)
+    counts = counts[counts.index.astype(str).str.strip() != ""]
+    return counts
 
 
 def code_frequency_by_group(df, group_col):
-    if df.empty or group_col not in df.columns:
+    if df.empty or group_col not in df.columns or "codes" not in df.columns:
         return pd.DataFrame()
+
     tmp = df.copy()
-    dummies = tmp["codes"].fillna("").str.get_dummies(sep=",")
+    tmp["codes"] = tmp["codes"].fillna("").apply(lambda x: ",".join(clean_code_list(x)))
+    dummies = tmp["codes"].str.get_dummies(sep=",")
+    dummies = dummies.loc[:, [c for c in dummies.columns if str(c).strip() != ""]]
+
+    if dummies.empty:
+        return pd.DataFrame()
+
     return pd.concat([tmp[[group_col]], dummies], axis=1).groupby(group_col).sum()
 
 
 def normalize_code_string(x):
-    if pd.isna(x):
-        return []
-    return [c.strip() for c in str(x).replace(";", ",").split(",") if c.strip()]
+    return clean_code_list(x)
 
 
 def compare_llm_human(llm_df, human_df, codebook):
@@ -465,92 +494,61 @@ def run_bertopic_optional(texts):
         return None, str(e)
 
 
-def pdf_safe_text(x, max_len=900):
-    text = str(x)
-    text = text.replace("\n", " ").replace("\r", " ")
+def report_safe_text(x, max_len=1200):
+    text = str(x).replace("\n", " ").replace("\r", " ")
     text = re.sub(r"\s+", " ", text).strip()
-    text = text.encode("latin-1", "replace").decode("latin-1")
-    text = re.sub(r"([_/|\\-])", r"\1 ", text)
+    text = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
     return text[:max_len]
 
 
-def pdf_write(pdf, text, h=6, max_len=900):
-    text = pdf_safe_text(text, max_len=max_len)
-    if not text:
-        text = " "
-    for i in range(0, len(text), 90):
-        line = text[i:i + 90]
-        pdf.multi_cell(0, h, txt=line)
-
-
 def generate_pdf_report(summary_df, code_counts, group_counts=None, topic_df=None, comparison_df=None, output_file="report.pdf"):
-    pdf = FPDF()
-    pdf.set_auto_page_break(auto=True, margin=15)
-    pdf.add_page()
-    pdf.set_left_margin(12)
-    pdf.set_right_margin(12)
+    doc = SimpleDocTemplate(output_file, pagesize=letter)
+    styles = getSampleStyleSheet()
+    story = []
 
-    pdf.set_font("Arial", size=12)
-    pdf_write(pdf, "ENVIO LLM Coding Summary Report", h=8)
+    story.append(Paragraph("ENVIO LLM Coding Summary Report", styles["Title"]))
+    story.append(Spacer(1, 12))
 
-    pdf.set_font("Arial", size=10)
-    pdf_write(pdf, f"Total coded segments: {len(summary_df)}")
-    pdf_write(pdf, f"Participants represented: {summary_df['participant_id'].nunique()}")
-    pdf_write(pdf, f"Source types: {', '.join(sorted(summary_df['source_type'].dropna().unique()))}")
+    story.append(Paragraph(f"Total coded segments: {len(summary_df)}", styles["Normal"]))
+    story.append(Paragraph(f"Participants represented: {summary_df['participant_id'].nunique()}", styles["Normal"]))
+    story.append(Paragraph(f"Source types: {', '.join(sorted(summary_df['source_type'].dropna().unique()))}", styles["Normal"]))
+    story.append(Spacer(1, 12))
 
-    pdf.ln(2)
-    pdf.set_font("Arial", size=11)
-    pdf_write(pdf, "Overall Code Frequencies:")
-    pdf.set_font("Arial", size=9)
+    story.append(Paragraph("Overall Code Frequencies", styles["Heading2"]))
     for code, count in code_counts.items():
-        pdf_write(pdf, f"{code}: {int(count)}", h=5, max_len=120)
+        story.append(Paragraph(report_safe_text(f"{code}: {int(count)}"), styles["Normal"]))
 
     if group_counts is not None and not group_counts.empty:
-        pdf.ln(2)
-        pdf.set_font("Arial", size=11)
-        pdf_write(pdf, "Grouped Code Frequencies by Source Type:")
-        pdf.set_font("Arial", size=8)
+        story.append(Spacer(1, 12))
+        story.append(Paragraph("Grouped Code Frequencies by Source Type", styles["Heading2"]))
         for source_type, row in group_counts.iterrows():
-            pairs = [f"{str(c)}={int(v)}" for c, v in row.items()]
-            pdf_write(pdf, f"{source_type}: " + "; ".join(pairs), h=5, max_len=500)
+            pairs = "; ".join([f"{str(c)}={int(v)}" for c, v in row.items()])
+            story.append(Paragraph(report_safe_text(f"{source_type}: {pairs}", 1000), styles["Normal"]))
 
     if topic_df is not None and not topic_df.empty:
-        pdf.ln(2)
-        pdf.set_font("Arial", size=11)
-        pdf_write(pdf, "Topic Modeling Results:")
-        pdf.set_font("Arial", size=8)
+        story.append(Spacer(1, 12))
+        story.append(Paragraph("Topic Modeling Results", styles["Heading2"]))
         for _, row in topic_df.iterrows():
-            pdf_write(pdf, f"Topic {row['topic_id']}: {row['top_words']}", h=5, max_len=400)
+            story.append(Paragraph(report_safe_text(f"Topic {row['topic_id']}: {row['top_words']}", 800), styles["Normal"]))
 
     if comparison_df is not None and not comparison_df.empty:
-        pdf.ln(2)
-        pdf.set_font("Arial", size=11)
-        pdf_write(pdf, "LLM vs Human Coding Agreement:")
-        pdf.set_font("Arial", size=8)
+        story.append(Spacer(1, 12))
+        story.append(Paragraph("LLM vs Human Coding Agreement", styles["Heading2"]))
         for _, row in comparison_df.iterrows():
-            pdf_write(
-                pdf,
+            line = (
                 f"{row['code']} | Kappa={row['cohen_kappa']} | F1={row['f1']} | "
-                f"Human={row['human_positive']} | LLM={row['llm_positive']}",
-                h=5,
-                max_len=300,
+                f"Human={row['human_positive']} | LLM={row['llm_positive']}"
             )
+            story.append(Paragraph(report_safe_text(line, 500), styles["Normal"]))
 
-    pdf.ln(2)
-    pdf.set_font("Arial", size=11)
-    pdf_write(pdf, "Sample Coded Segments:")
-    pdf.set_font("Arial", size=8)
-
+    story.append(Spacer(1, 12))
+    story.append(Paragraph("Sample Coded Segments", styles["Heading2"]))
     for _, row in summary_df.head(5).iterrows():
-        sample = (
-            f"Codes: {row['codes']} | "
-            f"Source: {row['source_type']} | "
-            f"Text: {str(row['text'])[:350]}"
-        )
-        pdf_write(pdf, sample, h=5, max_len=500)
-        pdf.ln(1)
+        sample = f"Codes: {row['codes']} | Source: {row['source_type']} | Text: {str(row['text'])[:500]}"
+        story.append(Paragraph(report_safe_text(sample, 900), styles["Normal"]))
+        story.append(Spacer(1, 6))
 
-    pdf.output(output_file)
+    doc.build(story)
     return output_file
 
 
@@ -776,9 +774,12 @@ if st.button("Run"):
             st.dataframe(code_counts.reset_index().rename(columns={"index": "code", 0: "count"}))
 
             st.subheader("Overall Code Frequency Heatmap")
-            fig, ax = plt.subplots(figsize=(10, 2))
-            sns.heatmap(code_counts.to_frame().T, annot=True, fmt="d", cmap="Blues", ax=ax)
-            st.pyplot(fig)
+            if not code_counts.empty:
+                fig, ax = plt.subplots(figsize=(10, 2))
+                sns.heatmap(code_counts.to_frame().T, annot=True, fmt="d", cmap="Blues", ax=ax)
+                st.pyplot(fig)
+            else:
+                st.info("No non-empty codes found for overall heatmap.")
 
             if not group_counts.empty:
                 st.subheader("Grouped Heatmap: Interview vs Costing vs Policy")
