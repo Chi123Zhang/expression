@@ -115,32 +115,48 @@ export OPENAI_API_KEY=your_key_here
 streamlit run app.py
 
 Example Workflow
+
 Upload one or more transcripts
+
 Click Run
+
 View:
+
 Coding outputs
+
 Heatmaps
+
 Topic modeling
+
 Download:
+
 PDF report (recommended)
+
 ZIP file (full reproducibility)
+
 
 ⚙️ Research Motivation
 
 Traditional qualitative coding:
 
 Requires extensive manual effort
+
 Can vary across annotators
+
 Is difficult to scale
 
 This system aims to:
 
 Reduce researcher workload
+
 Provide consistent coding structure
+
 Enable rapid exploratory analysis
+
 Support (not replace) human interpretation
 
 ⚙️ Limitations
+
 LLM outputs may vary depending on prompt and context
 
 Coding quality depends on codebook clarity
@@ -159,15 +175,21 @@ Enhanced multi-document reasoning
 Integration with qualitative research tools (e.g., NVivo-like workflows)
 
 Author
+
 Chi (Charlie) Zhang
+
 M.A. in Statistics (Advanced Machine Learning)
+
 Columbia University
 
 Focus:
 
 Statistical learning
+
 Applied machine learning
+
 LLMs for qualitative research
+
 📌 Summary
 
 This project demonstrates how LLMs can be integrated into qualitative research pipelines to:
