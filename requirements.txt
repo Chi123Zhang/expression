@@ -10,3 +10,37 @@ openai
 numpy
 torch
 torchvision
+
+# Streamlit Web App
+streamlit>=1.32.2
+
+# OpenAI API
+openai>=1.12.0
+
+# 数据处理与分析
+pandas>=2.1.1
+numpy>=1.26.4
+scikit-learn>=1.4.1
+
+# 文本处理 / PDF / DOCX
+python-docx>=0.8.12
+pypdf>=4.2.0
+
+# 可视化（批量分析 / 热力图）
+matplotlib>=3.7.1
+seaborn>=0.12.2
+
+# 其他
+tqdm>=4.66.2
+urllib3>=2.6.3
+watchdog>=6.0.0
+transformers>=5.6.2
+typer>=0.25.0
+typing-inspection>=0.4.2
+
+# 可选（如果使用 RAG 或 Embeddings）
+faiss-cpu>=1.7.4
+sentence-transformers>=2.6.1
+rank-bm25>=0.2.2
+torch>=2.2.1
+openai>=1.12.0
