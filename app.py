@@ -5,6 +5,8 @@ import json
 import streamlit as st
 from openai import OpenAI
 import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
 
 from rag_system import initialize_rag, load_pdf, load_docx
 from background_memory import onboard_user_background, retrieve_user_background
@@ -77,7 +79,7 @@ rag = st.session_state.rag
 # Sidebar
 # -----------------------------
 st.sidebar.header("Settings")
-mode = st.sidebar.selectbox("Choose mode", ["qa", "summary", "coding"])
+mode = st.sidebar.selectbox("Choose mode", ["coding", "qa", "summary"])
 manual_role = st.sidebar.selectbox("Choose response perspective", ["general", "pm", "engineer", "business"])
 show_context = st.sidebar.checkbox("Show retrieved context", value=False)
 show_debug = st.sidebar.checkbox("Show debug info", value=True)
@@ -86,7 +88,7 @@ batch_folder = st.sidebar.text_input("Batch folder path for transcripts (optiona
 use_resume_profile = st.sidebar.checkbox("Use uploaded resume to infer profile", value=True)
 allow_manual_override = st.sidebar.checkbox("Allow manual role override", value=True)
 user_id = st.sidebar.text_input("User ID", value="demo_user")
-query = st.text_area("Enter your question or paste transcript for coding", height=140)
+query = st.text_area("Enter your question or paste transcript for coding (optional)")
 
 # -----------------------------
 # Run
@@ -96,88 +98,84 @@ if st.button("Run"):
     if not api_key:
         st.error("OPENAI_API_KEY not set.")
     client = OpenAI(api_key=api_key)
+    codebook = ["environmental_barrier","social_support","healthcare_access","stigma","mental_health"]
 
-    # -----------------------------
-    # Batch processing
-    # -----------------------------
-    if batch_folder and mode=="coding":
-        st.info(f"Processing batch folder: {batch_folder}")
-        output_folder = os.path.join(batch_folder, "llm_outputs")
-        os.makedirs(output_folder, exist_ok=True)
-        codebook = ["environmental_barrier","social_support","healthcare_access","stigma","mental_health"]
+    # 自动填充默认 query，避免 clarification
+    if not query.strip() and uploaded_file and mode=="coding":
+        query = "Please code this transcript using the standard codebook."
 
-        for f in glob.glob(os.path.join(batch_folder,"*.*")):
-            base_name = os.path.splitext(os.path.basename(f))[0]
-            text = load_transcript_text(open(f,"rb"))
-            chunks = [text[i:i+2000] for i in range(0,len(text),2000)]
-            aggregated_output = []
-            for chunk in chunks:
-                aggregated_output.extend(run_llm_coding(chunk, codebook, client))
-            # JSON输出
-            json_file = os.path.join(output_folder,f"{base_name}_coding.json")
-            with open(json_file,"w",encoding="utf-8") as of:
-                json.dump(aggregated_output,of,indent=2,ensure_ascii=False)
-            # CSV输出
-            csv_file = os.path.join(output_folder,f"{base_name}_coding.csv")
-            rows = [{"text": seg["text"], "codes": ",".join(seg.get("codes",[]))} for seg in aggregated_output]
-            df = pd.DataFrame(rows)
-            df.to_csv(csv_file,index=False)
-            st.write(f"Saved LLM coding for {base_name} → JSON & CSV")
-            # 下载按钮
-            with open(csv_file,"rb") as f:
-                st.download_button(label=f"Download {base_name}_coding.csv", data=f, file_name=f"{base_name}_coding.csv", mime="text/csv")
+    transcripts = []
+    if uploaded_file:
+        transcripts.append(uploaded_file)
+    elif batch_folder and os.path.isdir(batch_folder):
+        for root, dirs, files in os.walk(batch_folder):
+            for f in files:
+                if f.lower().endswith((".pdf",".docx",".txt")):
+                    transcripts.append(os.path.join(root,f))
 
-        st.success(f"Batch processing done. Outputs in {output_folder}")
+    if not transcripts:
+        st.warning("No transcript provided!")
+    else:
+        for tf in transcripts:
+            # 读取文本
+            if hasattr(tf, "read"):
+                text = load_transcript_text(tf)
+                fname_base = tf.name
+            else:
+                with open(tf,"rb") as f:
+                    text = load_transcript_text(f)
+                fname_base = os.path.basename(tf)
 
-    # -----------------------------
-    # Single file interactive
-    # -----------------------------
-    elif query.strip() or uploaded_file:
-        inferred_profile = None
-        effective_role = manual_role
-        retrieved_background = None
+            # 构建 profile
+            profile = {"role": manual_role, "technical_level":"medium", "goal":"understanding", "short_reason":""}
+            if use_resume_profile and uploaded_file:
+                onboard_user_background(user_id=user_id, raw_background_inputs=[{"source_type":"resume","raw_text":text}])
+                retrieved_background = retrieve_user_background(user_id=user_id, query=query, recommended_chunk_types=["knowledge_boundary","expression_preference","technical_exposure"])
+                if retrieved_background.get("structured_profile"):
+                    profile["role"] = retrieved_background["structured_profile"].get("role_lens",manual_role)
 
-        if uploaded_file and use_resume_profile:
-            transcript_text = load_transcript_text(uploaded_file)
-            onboard_user_background(user_id=user_id, raw_background_inputs=[{"source_type":"resume","raw_text":transcript_text}])
+            # -----------------------------
+            # Coding 模式
+            # -----------------------------
+            if mode=="coding":
+                chunks = [text[i:i+2000] for i in range(0,len(text),2000)]
+                aggregated_output = []
+                for chunk in chunks:
+                    aggregated_output.extend(run_llm_coding(chunk, codebook, client))
 
-        orchestration_result = process_query(user_id=user_id, raw_query=query, has_uploaded_project_doc=True)
-        routing_decision = orchestration_result["routing_decision"]
+                # JSON 输出
+                st.subheader(f"Coding Output (JSON) for {fname_base}")
+                st.json(aggregated_output)
 
-        if "background_request" in routing_decision:
-            bg_req = routing_decision["background_request"]
-            retrieved_background = retrieve_user_background(user_id=bg_req["user_id"], query=bg_req["query"], recommended_chunk_types=bg_req["recommended_background_chunk_types"])
-            if retrieved_background.get("structured_profile"):
-                effective_role = manual_role if (allow_manual_override and manual_role!="general") else retrieved_background["structured_profile"].get("role_lens","general")
+                # CSV 输出
+                csv_file = f"{fname_base}_coding.csv"
+                df = pd.DataFrame([{"segment_index":i+1,"file_name":fname_base,"text": seg["text"], "codes": ",".join(seg.get("codes",[]))} for i, seg in enumerate(aggregated_output)])
+                df.to_csv(csv_file,index=False)
+                st.write(f"CSV saved: {csv_file}")
+                # 下载按钮
+                with open(csv_file,"rb") as f:
+                    st.download_button(label=f"Download {csv_file}", data=f, file_name=csv_file, mime="text/csv")
 
-        if show_debug:
-            st.subheader("Routing Decision / Active Profile")
-            st.json({"routing": routing_decision, "profile": retrieved_background, "effective_role": effective_role})
+                # 可选：简单热力图
+                code_counts = df['codes'].str.get_dummies(sep=',').sum()
+                st.subheader("Code Frequency Heatmap")
+                fig, ax = plt.subplots(figsize=(6,2))
+                sns.heatmap(code_counts.to_frame().T, annot=True, fmt="d", cmap="Blues", ax=ax)
+                st.pyplot(fig)
 
-        if mode=="coding":
-            codebook = ["environmental_barrier","social_support","healthcare_access","stigma","mental_health"]
-            text = transcript_text if uploaded_file else query
-            chunks = [text[i:i+2000] for i in range(0,len(text),2000)]
-            aggregated_output = []
-            for chunk in chunks:
-                aggregated_output.extend(run_llm_coding(chunk, codebook, client))
-            st.subheader("Coding Output (JSON)")
-            st.json(aggregated_output)
-            # 自动生成 CSV
-            csv_file = f"{uploaded_file.name}_coding.csv" if uploaded_file else "query_coding.csv"
-            rows = [{"text": seg["text"], "codes": ",".join(seg.get("codes",[]))} for seg in aggregated_output]
-            df = pd.DataFrame(rows)
-            df.to_csv(csv_file,index=False)
-            st.write(f"CSV saved: {csv_file}")
-            # 下载按钮
-            with open(csv_file,"rb") as f:
-                st.download_button(label=f"Download CSV", data=f, file_name=csv_file, mime="text/csv")
-        else:
-            result = rag.answer_question(query=query, mode=mode, role=effective_role, user_profile=retrieved_background)
-            st.subheader("Answer")
-            st.write(result["answer"])
-            st.subheader("Top Citations")
-            st.write(result.get("citations",[]))
-            if show_context:
-                st.subheader("Retrieved Context")
-                st.text(result.get("retrieved_context",""))
+            # -----------------------------
+            # QA / Summary 模式
+            # -----------------------------
+            else:
+                result = rag.answer_question(query=query, mode=mode, role=profile["role"], user_profile=profile)
+                st.subheader("Answer")
+                st.write(result.get("answer","No answer returned."))
+                st.subheader("Top Citations")
+                st.write(result.get("citations",[]))
+                if show_context:
+                    st.subheader("Retrieved Context")
+                    st.text(result.get("retrieved_context",""))
+
+            if show_debug:
+                st.subheader("Routing / Active Profile")
+                st.json({"profile": profile})
