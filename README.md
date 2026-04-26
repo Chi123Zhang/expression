@@ -112,15 +112,15 @@ export OPENAI_API_KEY=your_key_here
 
 3. Run the app
 
-streamlit run app.py
+- streamlit run app.py
 
-Example Workflow
+- Example Workflow
 
 Upload one or more transcripts
 
-Click Run
+- Click Run
 
-View:
+- View:
 
 Coding outputs
 
@@ -128,7 +128,7 @@ Heatmaps
 
 Topic modeling
 
-Download:
+- Download:
 
 PDF report (recommended)
 
@@ -140,56 +140,54 @@ ZIP file (full reproducibility)
 
 Traditional qualitative coding:
 
-Requires extensive manual effort
+- Requires extensive manual effort
 
-Can vary across annotators
+- Can vary across annotators
 
-Is difficult to scale
+- Is difficult to scale
 
 This system aims to:
 
-Reduce researcher workload
+- Reduce researcher workload
 
-Provide consistent coding structure
+- Provide consistent coding structure
 
-Enable rapid exploratory analysis
+- Enable rapid exploratory analysis
 
-Support (not replace) human interpretation
+- Support (not replace) human interpretation
 
 ⚙️ Limitations
 
-LLM outputs may vary depending on prompt and context
+- LLM outputs may vary depending on prompt and context
 
-Coding quality depends on codebook clarity
+- Coding quality depends on codebook clarity
 
-Topic modeling is unsupervised and may require interpretation
+- Topic modeling is unsupervised and may require interpretation
 
-Human-coded ground truth is needed for rigorous evaluation
+- Human-coded ground truth is needed for rigorous evaluation
 
 ⚙️ Future Work
-Improved human–LLM agreement benchmarking
+- Improved human–LLM agreement benchmarking
 
-Better domain adaptation via fine-tuning
+- Better domain adaptation via fine-tuning
 
-Enhanced multi-document reasoning
+- Enhanced multi-document reasoning
 
-Integration with qualitative research tools (e.g., NVivo-like workflows)
+- Integration with qualitative research tools (e.g., NVivo-like workflows)
 
 Author
 
 Chi (Charlie) Zhang
-
 M.A. in Statistics (Advanced Machine Learning)
-
 Columbia University
 
 Focus:
 
-Statistical learning
+- Statistical learning
 
-Applied machine learning
+- Applied machine learning
 
-LLMs for qualitative research
+- LLMs for qualitative research
 
 📌 Summary
 
