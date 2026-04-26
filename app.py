@@ -98,7 +98,7 @@ if st.button("Run"):
     client = OpenAI(api_key=api_key)
 
     # -----------------------------
-    # Batch processing模式
+    # Batch processing
     # -----------------------------
     if batch_folder and mode=="coding":
         st.info(f"Processing batch folder: {batch_folder}")
@@ -120,20 +120,23 @@ if st.button("Run"):
             # CSV输出
             csv_file = os.path.join(output_folder,f"{base_name}_coding.csv")
             rows = [{"text": seg["text"], "codes": ",".join(seg.get("codes",[]))} for seg in aggregated_output]
-            pd.DataFrame(rows).to_csv(csv_file,index=False)
+            df = pd.DataFrame(rows)
+            df.to_csv(csv_file,index=False)
             st.write(f"Saved LLM coding for {base_name} → JSON & CSV")
+            # 下载按钮
+            with open(csv_file,"rb") as f:
+                st.download_button(label=f"Download {base_name}_coding.csv", data=f, file_name=f"{base_name}_coding.csv", mime="text/csv")
 
         st.success(f"Batch processing done. Outputs in {output_folder}")
 
     # -----------------------------
-    # 单文件交互模式
+    # Single file interactive
     # -----------------------------
     elif query.strip() or uploaded_file:
         inferred_profile = None
         effective_role = manual_role
         retrieved_background = None
 
-        # 背景记忆
         if uploaded_file and use_resume_profile:
             transcript_text = load_transcript_text(uploaded_file)
             onboard_user_background(user_id=user_id, raw_background_inputs=[{"source_type":"resume","raw_text":transcript_text}])
@@ -141,19 +144,16 @@ if st.button("Run"):
         orchestration_result = process_query(user_id=user_id, raw_query=query, has_uploaded_project_doc=True)
         routing_decision = orchestration_result["routing_decision"]
 
-        # 决定角色
         if "background_request" in routing_decision:
             bg_req = routing_decision["background_request"]
             retrieved_background = retrieve_user_background(user_id=bg_req["user_id"], query=bg_req["query"], recommended_chunk_types=bg_req["recommended_background_chunk_types"])
             if retrieved_background.get("structured_profile"):
                 effective_role = manual_role if (allow_manual_override and manual_role!="general") else retrieved_background["structured_profile"].get("role_lens","general")
 
-        # Debug
         if show_debug:
             st.subheader("Routing Decision / Active Profile")
             st.json({"routing": routing_decision, "profile": retrieved_background, "effective_role": effective_role})
 
-        # 生成输出
         if mode=="coding":
             codebook = ["environmental_barrier","social_support","healthcare_access","stigma","mental_health"]
             text = transcript_text if uploaded_file else query
@@ -166,9 +166,12 @@ if st.button("Run"):
             # 自动生成 CSV
             csv_file = f"{uploaded_file.name}_coding.csv" if uploaded_file else "query_coding.csv"
             rows = [{"text": seg["text"], "codes": ",".join(seg.get("codes",[]))} for seg in aggregated_output]
-            pd.DataFrame(rows).to_csv(csv_file,index=False)
+            df = pd.DataFrame(rows)
+            df.to_csv(csv_file,index=False)
             st.write(f"CSV saved: {csv_file}")
-
+            # 下载按钮
+            with open(csv_file,"rb") as f:
+                st.download_button(label=f"Download CSV", data=f, file_name=csv_file, mime="text/csv")
         else:
             result = rag.answer_question(query=query, mode=mode, role=effective_role, user_profile=retrieved_background)
             st.subheader("Answer")
