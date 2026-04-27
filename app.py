@@ -348,33 +348,117 @@ def code_frequency_by_group(df, group_col):
 def normalize_code_string(x):
     return clean_code_list(x)
 
-
-def compare_llm_human(llm_df, human_df, codebook):
+def compare_llm_human(llm_df, human_df, codebook=None):
     results = []
 
-    join_cols = []
-    for col in ["participant_id", "source_type", "segment_index"]:
-        if col in llm_df.columns and col in human_df.columns:
-            join_cols.append(col)
+    llm_df = llm_df.copy()
+    human_df = human_df.copy()
 
-    if join_cols:
-        merged = pd.merge(
-            llm_df,
-            human_df,
-            on=join_cols,
-            suffixes=("_llm", "_human"),
-            how="inner",
-        )
-        llm_col = "codes_llm"
-        human_col = "codes_human"
+    llm_df.columns = [str(c).strip() for c in llm_df.columns]
+    human_df.columns = [str(c).strip() for c in human_df.columns]
+
+    if "segment_index" not in human_df.columns and "segment_id" in human_df.columns:
+        human_df = human_df.rename(columns={"segment_id": "segment_index"})
+
+    if "segment_index" not in llm_df.columns:
+        llm_df["segment_index"] = range(1, len(llm_df) + 1)
+
+    if "segment_index" not in human_df.columns:
+        human_df["segment_index"] = range(1, len(human_df) + 1)
+
+    llm_df["segment_index"] = pd.to_numeric(llm_df["segment_index"], errors="coerce")
+    human_df["segment_index"] = pd.to_numeric(human_df["segment_index"], errors="coerce")
+
+    llm_df = llm_df.dropna(subset=["segment_index"])
+    human_df = human_df.dropna(subset=["segment_index"])
+
+    llm_df["segment_index"] = llm_df["segment_index"].astype(int)
+    human_df["segment_index"] = human_df["segment_index"].astype(int)
+
+    metadata_cols = {
+        "participant_id", "segment_index", "segment_id", "source_name",
+        "source_type", "source_date", "source_section", "text",
+        "codes", "rationale"
+    }
+
+    # Codes from LLM string column
+    llm_codes_found = set()
+    if "codes" in llm_df.columns:
+        for x in llm_df["codes"].fillna(""):
+            llm_codes_found.update(clean_code_list(x))
+
+    # Codes from human binary columns
+    human_code_cols = {
+        c for c in human_df.columns
+        if c not in metadata_cols and pd.api.types.is_numeric_dtype(human_df[c])
+    }
+
+    # Optional codebook + observed codes
+    if codebook is None:
+        codebook = []
+
+    dynamic_codebook = sorted(
+        set(codebook).union(llm_codes_found).union(human_code_cols)
+    )
+
+    dynamic_codebook = [
+        c for c in dynamic_codebook
+        if str(c).strip() and c not in ["ERROR", "PARSE_ERROR"]
+    ]
+
+    if not dynamic_codebook:
+        return pd.DataFrame([{
+            "code": "NO_CODES_FOUND",
+            "cohen_kappa": None,
+            "f1": None,
+            "human_positive": 0,
+            "llm_positive": 0,
+            "matched_segments": 0,
+        }])
+
+    # LLM binary
+    llm_binary = llm_df[["segment_index"]].copy()
+    for code in dynamic_codebook:
+        if "codes" in llm_df.columns:
+            llm_binary[code] = llm_df["codes"].fillna("").apply(
+                lambda x: int(code in clean_code_list(x))
+            )
+        else:
+            llm_binary[code] = 0
+
+    # Human binary
+    human_binary = human_df[["segment_index"]].copy()
+    if "codes" in human_df.columns:
+        for code in dynamic_codebook:
+            human_binary[code] = human_df["codes"].fillna("").apply(
+                lambda x: int(code in clean_code_list(x))
+            )
     else:
-        n = min(len(llm_df), len(human_df))
-        merged = pd.DataFrame({
-            "codes_llm": llm_df["codes"].head(n).values,
-            "codes_human": human_df["codes"].head(n).values,
-        })
-        llm_col = "codes_llm"
-        human_col = "codes_human"
+        for code in dynamic_codebook:
+            if code in human_df.columns:
+                human_binary[code] = pd.to_numeric(
+                    human_df[code], errors="coerce"
+                ).fillna(0).astype(int).clip(0, 1)
+            else:
+                human_binary[code] = 0
+
+    merged = pd.merge(
+        llm_binary,
+        human_binary,
+        on="segment_index",
+        suffixes=("_llm", "_human"),
+        how="inner",
+    )
+
+    if merged.empty:
+        n = min(len(llm_binary), len(human_binary))
+        merged = pd.concat(
+            [
+                llm_binary[dynamic_codebook].head(n).reset_index(drop=True).add_suffix("_llm"),
+                human_binary[dynamic_codebook].head(n).reset_index(drop=True).add_suffix("_human"),
+            ],
+            axis=1,
+        )
 
     if merged.empty:
         return pd.DataFrame([{
@@ -386,9 +470,14 @@ def compare_llm_human(llm_df, human_df, codebook):
             "matched_segments": 0,
         }])
 
-    for code in codebook:
-        y_llm = merged[llm_col].apply(lambda x: int(code in normalize_code_string(x)))
-        y_human = merged[human_col].apply(lambda x: int(code in normalize_code_string(x)))
+    for code in dynamic_codebook:
+        y_llm = pd.to_numeric(
+            merged[f"{code}_llm"], errors="coerce"
+        ).fillna(0).astype(int)
+
+        y_human = pd.to_numeric(
+            merged[f"{code}_human"], errors="coerce"
+        ).fillna(0).astype(int)
 
         try:
             kappa = round(cohen_kappa_score(y_human, y_llm), 4)
@@ -422,6 +511,80 @@ def compare_llm_human(llm_df, human_df, codebook):
     })
 
     return pd.DataFrame(results)
+    
+# def compare_llm_human(llm_df, human_df, codebook):
+#     results = []
+
+#     join_cols = []
+#     for col in ["participant_id", "source_type", "segment_index"]:
+#         if col in llm_df.columns and col in human_df.columns:
+#             join_cols.append(col)
+
+#     if join_cols:
+#         merged = pd.merge(
+#             llm_df,
+#             human_df,
+#             on=join_cols,
+#             suffixes=("_llm", "_human"),
+#             how="inner",
+#         )
+#         llm_col = "codes_llm"
+#         human_col = "codes_human"
+#     else:
+#         n = min(len(llm_df), len(human_df))
+#         merged = pd.DataFrame({
+#             "codes_llm": llm_df["codes"].head(n).values,
+#             "codes_human": human_df["codes"].head(n).values,
+#         })
+#         llm_col = "codes_llm"
+#         human_col = "codes_human"
+
+#     if merged.empty:
+#         return pd.DataFrame([{
+#             "code": "NO_MATCH",
+#             "cohen_kappa": None,
+#             "f1": None,
+#             "human_positive": 0,
+#             "llm_positive": 0,
+#             "matched_segments": 0,
+#         }])
+
+#     for code in codebook:
+#         y_llm = merged[llm_col].apply(lambda x: int(code in normalize_code_string(x)))
+#         y_human = merged[human_col].apply(lambda x: int(code in normalize_code_string(x)))
+
+#         try:
+#             kappa = round(cohen_kappa_score(y_human, y_llm), 4)
+#         except Exception:
+#             kappa = None
+
+#         try:
+#             f1 = round(f1_score(y_human, y_llm, zero_division=0), 4)
+#         except Exception:
+#             f1 = None
+
+#         results.append({
+#             "code": code,
+#             "cohen_kappa": kappa,
+#             "f1": f1,
+#             "human_positive": int(y_human.sum()),
+#             "llm_positive": int(y_llm.sum()),
+#             "matched_segments": len(merged),
+#         })
+
+#     macro_f1 = pd.Series([r["f1"] for r in results if r["f1"] is not None]).mean()
+#     macro_kappa = pd.Series([r["cohen_kappa"] for r in results if r["cohen_kappa"] is not None]).mean()
+
+#     results.append({
+#         "code": "MACRO_AVERAGE",
+#         "cohen_kappa": round(macro_kappa, 4) if pd.notna(macro_kappa) else None,
+#         "f1": round(macro_f1, 4) if pd.notna(macro_f1) else None,
+#         "human_positive": "",
+#         "llm_positive": "",
+#         "matched_segments": len(merged),
+#     })
+
+#     return pd.DataFrame(results)
 
 
 def run_lda_topic_modeling(texts, n_topics=5, n_words=10):
