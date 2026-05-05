@@ -46,8 +46,8 @@ DEFAULT_DOCS_DIR = "."
 
 USE_OPENAI = True
 
-OPENAI_MODEL = "gpt-5.5"
-OPENAI_FALLBACK_MODEL = "gpt-5.3-chat-latest"
+OPENAI_MODEL = "gpt-4o-mini"
+OPENAI_FALLBACK_MODEL = "gpt-4o-mini"
 
 
 # =========================================================
