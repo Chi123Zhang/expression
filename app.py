@@ -222,7 +222,7 @@ Relevant RAG context from project documents:
 {retrieved_context}
 
 Instructions:
-1. Split the segment into meaningful qualitative units.
+1. Treat the current segment as exactly one coding unit. Do not split it into smaller segments.
 2. Assign zero, one, or multiple codes from the allowed codebook only.
 3. Do not invent codes outside the codebook.
 4. Preserve short evidence excerpts.
