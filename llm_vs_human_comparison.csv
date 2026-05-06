@@ -1,7 +1,0 @@
-code,cohen_kappa,f1,human_positive,llm_positive,matched_segments
-environmental_barrier,0.3517,0.4167,19,5,79
-healthcare_access,0.3724,0.566,19,34,79
-mental_health,0.5741,0.6,6,4,79
-social_support,0.4034,0.5405,21,16,79
-stigma,0.8433,0.8571,7,7,79
-MACRO_AVERAGE,0.509,0.5961,,,79
