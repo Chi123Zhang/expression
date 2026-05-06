@@ -1,202 +1,466 @@
-## Research Experience
+# ENVIO LLM Coding Assistant
 
-**Research Assistant, Social Intervention Group (SIG), Columbia University**  
-*2026 – Present*
+A context-aware, human-aligned qualitative coding framework using Large Language Models (LLMs) for transcript analysis, retrieval-augmented reasoning, and adaptive expression.
 
-- Contributed to the ENVIO project, which evaluates the effectiveness of large language models (LLMs) in coding de-identified qualitative interview transcripts compared to human coders  
-- Explored LLM-based qualitative coding, topic modeling, and workflow efficiency for HIV-related social science research  
-- Developed a background-aware RAG (Retrieval-Augmented Generation) pipeline integrating structured user profiles, vector-based memory, and dual-context retrieval  
-- Designed a query orchestration framework to dynamically combine user background, document context, and external knowledge for grounded and personalized generation  
-- Improved model reliability by reducing hallucination and enforcing evidence-based responses through document grounding  
-- Investigated evaluation strategies including response consistency, grounding quality, and alignment with human coding behavior
+---
 
-📊 ENVIO LLM Coding Assistant
+# Overview
 
-A document-grounded system for automated qualitative coding, topic modeling, and LLM–human comparison in social science research.
+The ENVIO LLM Coding Assistant is a research-oriented qualitative coding system developed as part of the ENVIO / AI4SGS initiative at Columbia University.
 
-🧠 Overview
+The project investigates how Large Language Models (LLMs) can support qualitative social science workflows through:
 
-This project implements an end-to-end pipeline for analyzing qualitative transcripts using Large Language Models (LLMs), designed for the ENVIO / TechMPower research context.
+- human-aligned transcript coding
+- contextual retrieval augmentation (RAG)
+- adaptive qualitative reasoning
+- topic modeling
+- structured evaluation
+- background-aware expression generation
 
-The goal is to explore whether LLMs can support or partially automate traditional qualitative coding workflows, which are often time-consuming and subject to human variability.
+Unlike traditional GPT prompting pipelines, this system provides:
 
-The system focuses on identifying themes such as:
+- reproducible qualitative coding
+- controlled RAG vs No-RAG evaluation
+- contextual reasoning windows
+- batch-consistent coding
+- human-comparison metrics
+- adaptive explanation layers
 
-Healthcare access
-Social support
-Stigma
-Mental health
-Environmental barriers
+---
 
-⚙️ Key Features
+# Research Context
 
-1. Multi-Source Input
-Upload multiple files (PDF, DOCX, TXT)
-Optional URL ingestion
-Automatic merging of related documents into a single “participant”
+This project was developed within the Social Intervention Group (SIG) and AI for Social Good and Society (AI4SGS) research environment at Columbia University.
 
-2. LLM-Based Coding
-Splits transcripts into meaningful segments
-Assigns codes using a predefined codebook
-Produces structured JSON and CSV outputs
+The system is designed to support:
 
-3. Quantitative Analysis
-Code frequency distributions
-Grouped analysis (e.g., interview vs costing vs policy)
-Participant-level comparison
-Time/date-based trends
+- qualitative transcript analysis
+- HIV/social intervention research
+- coding consistency studies
+- LLM-human alignment research
+- workflow efficiency exploration
+- adaptive AI communication systems
 
-4. Visualization
-Heatmaps (overall, grouped, participant-level)
-Easy-to-interpret summary tables
+---
 
-5. Topic Modeling
-LDA-based topic extraction
-Optional BERTopic integration
-Designed to complement qualitative coding
+# Main Contributions
 
-6. Report Generation
-Automatically generates a PDF report using ReportLab
-Includes:
-Summary statistics
-Code distributions
-Topic modeling results
-Sample coded segments
+## Human-Aligned Qualitative Coding
 
-7. LLM vs Human Comparison (Optional)
-Upload human-coded CSV
-Compute:
-F1 Score
-Cohen’s Kappa
-Visualize agreement with heatmaps
+The system aligns LLM-generated coding outputs with human-coded transcript segments for structured evaluation.
 
-8. RAG Integration
-Retrieval-Augmented Generation (RAG)
-Incorporates background documents into coding context
-Improves domain-specific interpretation
+Supported metrics include:
 
-⚙️ Outputs
-Each run generates:
+- Macro F1
+- Cohen’s Kappa
+- category-level agreement
+- RAG vs No-RAG comparison
 
-- *_coding.csv → segment-level coding results
+---
 
-- batch_summary_coding.csv → merged dataset
+## Contextual Retrieval-Augmented Reasoning
 
-- lda_topics.csv → topic modeling results
+Instead of coding isolated sentences independently, the system performs:
 
-- llm_vs_human_comparison.csv → agreement metrics (if provided)
+```text
+previous context
++ current segment
++ next context
+```
 
-- envio_coding_report.pdf → final report
+retrieval-aware qualitative reasoning.
 
-- .zip → all outputs bundled
+This substantially improves semantic grounding for ambiguous qualitative categories.
 
-⚙️ How to Run
-1. Install dependencies
+---
+
+## Batch-Consistent Coding
+
+The latest production pipeline uses:
+
+```python
+BATCH_SIZE = 5
+```
+
+to improve:
+
+- coding consistency
+- semantic continuity
+- transcript coherence
+- retrieval efficiency
+
+---
+
+## Background-Aware Expression Layer
+
+The system includes an adaptive expression layer capable of generating different explanation styles depending on user background.
+
+Supported perspectives include:
+
+- General
+- Engineering
+- Business
+- PM / Workflow-oriented
+
+This transforms the project from a simple coding assistant into a context-aware qualitative reasoning framework.
+
+---
+
+# System Architecture
+
+```text
+Transcript / PDF
+↓
+Human-Aligned Segmentation
+↓
+Batch Coding
+↓
+Contextual RAG Retrieval
+↓
+RAG Refinement
+↓
+Structured Output Generation
+↓
+Human Comparison
+↓
+Evaluation Metrics + Heatmaps + Reports
+```
+
+---
+
+# Core Features
+
+- Human CSV alignment
+- Batch qualitative coding
+- Contextual retrieval windows
+- RAG vs No-RAG comparison
+- Topic modeling (LDA)
+- Adaptive expression generation
+- PDF / CSV / ZIP export
+- Human agreement heatmaps
+- Streamlit interactive UI
+- Profile-aware explanation styles
+
+---
+
+# Experimental Results
+
+## Macro-Level Evaluation
+
+| Setting | Macro F1 | Macro Cohen’s Kappa |
+|---|---|---|
+| No-RAG | 0.5496 | 0.4620 |
+| Contextual RAG | 0.6204 | 0.5408 |
+
+## Improvements from Contextual RAG
+
+| Metric | Improvement |
+|---|---|
+| Macro F1 | +0.0708 |
+| Macro Cohen’s Kappa | +0.0788 |
+
+---
+
+# Per-Code Agreement Results
+
+| Code | Cohen’s Kappa | F1 |
+|---|---|---|
+| environmental_barrier | 0.3517 | 0.4167 |
+| healthcare_access | 0.3925 | 0.5714 |
+| mental_health | 0.7070 | 0.7273 |
+| social_support | 0.4093 | 0.5294 |
+| stigma | 0.8433 | 0.8571 |
+
+---
+
+# Key Findings
+
+The experimental results suggest:
+
+- contextual retrieval substantially improves qualitative reasoning
+- transcript-local semantic context is highly important
+- human-aligned segmentation improves evaluation validity
+- batch-consistent coding stabilizes qualitative outputs
+- explicit categories achieve higher agreement
+- semantically distributed categories benefit most from RAG
+
+The strongest contextual improvements were observed for:
+
+- healthcare_access
+- social_support
+- environmental_barrier
+
+The highest human agreement was observed for:
+
+- stigma
+- mental_health
+
+---
+
+# Why This Project Is Different from Plain GPT
+
+A standard GPT prompt may generate labels for transcript segments, but it does not provide:
+
+- stable segmentation
+- structured evaluation
+- reproducibility
+- contextual retrieval refinement
+- batch consistency
+- human comparison
+- adaptive communication
+- systematic experimentation
+
+This project operationalizes LLM-assisted qualitative coding into a reproducible research framework.
+
+---
+
+# Repository Structure
+
+```text
+app.py
+Main Streamlit application.
+
+rag_system.py
+Retrieval-Augmented Generation pipeline.
+
+llm_batch_coding.py
+Batch coding + contextual refinement logic.
+
+background_memory.py
+User profile and memory handling.
+
+expression_layer.py
+Adaptive expression generation.
+
+query_orchestrator.py
+Routing and orchestration layer.
+
+requirements.txt
+Dependencies.
+
+outputs/
+Generated CSVs, heatmaps, JSON outputs, ZIP files.
+```
+
+---
+
+# Installation
+
+## Clone Repository
+
+```bash
+git clone https://github.com/Chi123Zhang/ENVIO-LLM-Coding-Assistant
+
+cd ENVIO-LLM-Coding-Assistant
+```
+
+---
+
+## Install Dependencies
+
+```bash
 pip install -r requirements.txt
+```
 
-Make sure you include:
+---
 
-streamlit
-openai
-pandas
-scikit-learn
-matplotlib
-seaborn
-reportlab
-beautifulsoup4
-requests
+# Environment Variables
 
-2. Set OpenAI API key
+## Mac / Linux
 
-export OPENAI_API_KEY=your_key_here
+```bash
+export OPENAI_API_KEY=your_api_key
 
-3. Run the app
+export HF_TOKEN=your_huggingface_token
+```
 
-- streamlit run app.py
+## Windows PowerShell
 
-- Example Workflow
+```powershell
+$env:OPENAI_API_KEY="your_api_key"
 
-Upload one or more transcripts
+$env:HF_TOKEN="your_huggingface_token"
+```
 
-- Click Run
+---
 
-- View:
+# Run Locally
 
-Coding outputs
+```bash
+streamlit run app.py
+```
 
-Heatmaps
+---
 
-Topic modeling
+# Streamlit Cloud Deployment
 
-- Download:
+1. Connect GitHub repository
+2. Set secrets:
+   - OPENAI_API_KEY
+   - HF_TOKEN
+3. Deploy app.py
 
-PDF report (recommended)
+---
 
-ZIP file (full reproducibility)
+# Recommended Workflow
 
+## Step 1 — Basic Transcript Coding
 
+Upload transcript and run qualitative coding.
 
-⚙️ Research Motivation
+Outputs:
+- coded CSV
+- topic modeling
+- frequency tables
 
-Traditional qualitative coding:
+---
 
-- Requires extensive manual effort
+## Step 2 — Instruction-Aware Coding
 
-- Can vary across annotators
+Add coding instructions or research questions.
 
-- Is difficult to scale
+Example:
 
-This system aims to:
+```text
+Focus on barriers to healthcare access and social support.
+```
 
-- Reduce researcher workload
+This enables guided contextual reasoning.
 
-- Provide consistent coding structure
+---
 
-- Enable rapid exploratory analysis
+## Step 3 — Background-Aware Expression
 
-- Support (not replace) human interpretation
+Select different explanation styles:
 
-⚙️ Limitations
+- General
+- Engineering
+- Business
+- PM
 
-- LLM outputs may vary depending on prompt and context
+The same underlying reasoning is expressed differently depending on audience context.
 
-- Coding quality depends on codebook clarity
+---
 
-- Topic modeling is unsupervised and may require interpretation
+## Step 4 — Human Comparison Evaluation
 
-- Human-coded ground truth is needed for rigorous evaluation
+Upload human-coded CSV.
 
-⚙️ Future Work
-- Improved human–LLM agreement benchmarking
+The system computes:
 
-- Better domain adaptation via fine-tuning
+- Macro F1
+- Cohen’s Kappa
+- code-level agreement
+- heatmaps
+- RAG vs No-RAG comparison
 
-- Enhanced multi-document reasoning
+---
 
-- Integration with qualitative research tools (e.g., NVivo-like workflows)
+# Example Outputs
 
-Author
+The system automatically generates:
 
-Chi Zhang
+- coded transcript CSVs
+- evaluation CSVs
+- heatmaps
+- JSON outputs
+- PDF reports
+- ZIP export packages
 
-M.A. in Statistics (Advanced Machine Learning)
+---
 
+# Topic Modeling
+
+The LDA topic modeling pipeline identifies recurring semantic structures including:
+
+- healthcare access
+- institutional barriers
+- educational resources
+- stigma reduction
+- support systems
+
+Representative topic keywords include:
+
+| Topic | Representative Terms |
+|---|---|
+| Topic 1 | access, telehealth, help |
+| Topic 2 | staffing, barriers, supports |
+| Topic 3 | grants, reduction, help |
+| Topic 4 | educational, resources |
+| Topic 5 | program, services, access |
+
+---
+
+# Current Limitations
+
+Current known limitations include:
+
+- long transcript latency
+- Streamlit timeout risks
+- retrieval sensitivity
+- stochastic LLM outputs
+- qualitative ambiguity
+- limited fine-tuning data
+
+---
+
+# Future Directions
+
+Potential future work includes:
+
+- adaptive retrieval routing
+- hierarchical coding
+- semantic uncertainty estimation
+- selective RAG refinement
+- LoRA fine-tuning
+- multi-document reasoning
+- richer profile inference
+- reinforcement-guided refinement
+- longitudinal transcript analysis
+
+---
+
+# Research Interpretation
+
+The main contribution of this project is not simply that retrieval improves coding.
+
+Instead, the project demonstrates that:
+
+- human-aligned segmentation
+- contextual retrieval windows
+- batch-consistent coding
+- structured evaluation
+- adaptive expression framing
+
+collectively improve the reproducibility and reliability of LLM-assisted qualitative coding workflows.
+
+The system therefore functions as a context-aware qualitative reasoning framework rather than a simple GPT wrapper.
+
+---
+
+# Live Demo
+
+Streamlit App:
+
+```text
+https://expression-4wfrtnmolvi6ksdsst2h3c.streamlit.app/
+```
+
+---
+
+# Author
+
+## Chi (Charlie) Zhang
+
+M.A. Statistics (Advanced Machine Learning Track)  
 Columbia University
 
-Focus:
+Graduate Research Assistant  
+AI for Social Good and Society (AI4SGS)  
+Social Intervention Group (SIG)
 
-- Statistical learning
+---
 
-- Applied machine learning
+# Acknowledgements
 
-- LLMs for qualitative research
-
-📌 Summary
-
-This project demonstrates how LLMs can be integrated into qualitative research pipelines to:
-
-Automate coding
-Generate structured insights
-Support scalable analysis
-
-while maintaining interpretability and alignment with traditional research practices.
+This project was developed as part of the ENVIO / AI4SGS research initiative focused on AI-assisted qualitative reasoning and social science workflow support.
