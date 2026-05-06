@@ -1,0 +1,168 @@
+# Engineer-Oriented Role Output
+
+## Artifact Type and System Scope
+
+This output should be interpreted as an implementation-system analysis rather than a software engineering artifact.
+
+The interviews describe the operational infrastructure required to support HIV and substance use disorder (SUD) care integration in jail-linked environments. The “system” in this context includes:
+
+- correctional facilities
+- healthcare providers
+- community organizations
+- implementation teams
+- technical assistance processes
+- staff training workflows
+- post-release coordination services
+
+The central engineering challenge is not algorithmic performance, but maintaining reliable coordination and continuity across multiple organizational components.
+
+---
+
+# Workflow Architecture
+
+The interviews suggest a multi-stage implementation workflow.
+
+## 1. Identification and Screening Layer
+
+Individuals must first be identified for HIV, SUD, and related care needs.
+
+Potential failure points include:
+
+- insufficient staffing
+- limited screening capacity
+- inconsistent intake procedures
+- operational resource constraints
+
+These issues create bottlenecks early in the pipeline.
+
+---
+
+## 2. In-Jail Service Coordination Layer
+
+After identification, HIV care, SUD care, mental health services, and case management workflows must be coordinated inside correctional settings.
+
+A recurring issue is weak interoperability between service providers and operational teams.
+
+Observed coordination problems include:
+
+- fragmented communication
+- inconsistent referral pathways
+- duplicated responsibilities
+- unclear ownership of care transitions
+
+The interviews repeatedly indicate that integration quality depends heavily on cross-functional coordination fidelity.
+
+---
+
+## 3. Staff Adoption and Implementation Layer
+
+Implementation success depends on whether staff can consistently execute evidence-based practices.
+
+The interviews identify several implementation risks:
+
+- provider stigma
+- inconsistent protocol adherence
+- limited training
+- operational resistance to workflow changes
+- uneven adoption of new technologies
+
+This resembles a deployment problem where system reliability depends on user adoption and operational compliance rather than technical availability alone.
+
+---
+
+## 4. Technical Assistance and Monitoring Layer
+
+The implementation framework requires ongoing technical assistance and supervision.
+
+The interviews suggest the need for:
+
+- continuous monitoring
+- intervention fidelity checks
+- operational troubleshooting
+- recurring implementation reviews
+- structured escalation pathways
+
+This layer functions similarly to a maintenance and observability system in distributed operational infrastructure.
+
+Without continuous support, implementation drift may occur over time.
+
+---
+
+## 5. Post-Release Continuity Layer
+
+One major risk occurs during transitions from jail to community care systems.
+
+Key failure points include:
+
+- transportation barriers
+- weak community-provider coordination
+- communication gaps between jail and external providers
+- inconsistent follow-up support
+
+This transition layer appears to be one of the highest-risk segments in the overall service workflow.
+
+Even if in-jail implementation succeeds, continuity failures after release may significantly reduce long-term intervention effectiveness.
+
+---
+
+# System-Level Engineering Interpretation
+
+The interviews suggest that TechMPower behaves like a multi-stakeholder coordination system with several tightly coupled operational dependencies.
+
+The primary engineering concerns are therefore:
+
+- coordination reliability
+- implementation fidelity
+- workflow continuity
+- operational scalability
+- monitoring and feedback loops
+- human-system adoption constraints
+
+The challenge is not simply deploying a protocol, but sustaining stable execution across heterogeneous organizations with varying resource constraints and operational practices.
+
+---
+
+# Infrastructure and Reliability Perspective
+
+From an engineering perspective, several recurring reliability risks appear:
+
+| System Layer | Potential Failure Mode |
+|---|---|
+| Screening | missed identification or intake inconsistency |
+| Coordination | fragmented communication across providers |
+| Staff adoption | inconsistent intervention execution |
+| Technical support | unresolved implementation drift |
+| Post-release transition | loss of continuity of care |
+
+The interviews imply that operational resilience depends heavily on redundancy, supervision, communication quality, and continuous monitoring processes.
+
+---
+
+# Recommended Implementation Priorities
+
+The evidence suggests several high-priority implementation improvements:
+
+1. Standardized coordination protocols across organizations
+2. Structured staff onboarding and supervision pipelines
+3. Continuous implementation monitoring systems
+4. Defined escalation and technical assistance workflows
+5. Stronger transition infrastructure between jail and community care settings
+6. Better operational support for transportation and follow-up coordination
+
+---
+
+# Role-Aware Interpretation Objective
+
+This engineer-oriented explanation reframes the same qualitative evidence as a systems coordination and implementation reliability problem.
+
+Compared with business-oriented outputs, this explanation emphasizes:
+
+- workflow architecture
+- system dependencies
+- operational bottlenecks
+- reliability risks
+- implementation fidelity
+- monitoring infrastructure
+- failure propagation across service layers
+
+This supports the broader ENVIO project goal of adaptive, role-conditioned qualitative interpretation using LLM-assisted explanation layers.
